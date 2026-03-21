@@ -4,6 +4,7 @@ import { useTheme } from "../../theme";
 import { useQueryStore } from "../../store/query";
 
 interface QueryEditorProps {
+  workspaceId: string;
   focused: boolean;
   width: number;
   height: number;
@@ -15,10 +16,11 @@ const queryKeyBindings: KeyBinding[] = [
   { name: "return", ctrl: true, action: "submit" },
 ];
 
-export function QueryEditor({ focused, width, height }: QueryEditorProps) {
+export function QueryEditor({ workspaceId, focused, width, height }: QueryEditorProps) {
   const theme = useTheme();
   const editorRef = useRef<TextareaRenderable | null>(null);
-  const { queryText, setQueryText, executeQuery, isExecuting } = useQueryStore();
+  const store = useQueryStore();
+  const { queryText, isExecuting } = store.getWorkspaceState(workspaceId);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -59,11 +61,11 @@ export function QueryEditor({ focused, width, height }: QueryEditorProps) {
       wrapMode="none"
       keyBindings={queryKeyBindings}
       onContentChange={() => {
-        setQueryText(editorRef.current?.plainText ?? "");
+        store.setQueryText(workspaceId, editorRef.current?.plainText ?? "");
       }}
       onSubmit={() => {
         if (!isExecuting) {
-          void executeQuery();
+          void store.executeQuery(workspaceId);
         }
       }}
     />

@@ -1,23 +1,37 @@
 import type { Sql } from "postgres";
-import type { QueryResult } from "./types";
+import type { QueryResult, TableFilterClause } from "./types";
+import {
+  escapeLikePattern,
+  formatValueForSql,
+  isTextLikeType,
+  operatorNeedsValue,
+  quoteIdentifier,
+  quoteValue,
+} from "../utils/sql";
 
-export async function queryTable(
+interface ColumnMeta {
+  name: string;
+  dataType: string;
+  udtName: string;
+  type: string;
+}
+
+interface TableQueryOptions {
+  page?: number;
+  pageSize?: number;
+  orderBy?: string;
+  orderDir?: "ASC" | "DESC";
+  quickSearch?: string;
+  filters?: TableFilterClause[];
+}
+
+type QueryColumn = Pick<ColumnMeta, "name" | "type">;
+
+async function getColumnMetadata(
   sql: Sql,
   schema: string,
-  table: string,
-  options: {
-    page?: number;
-    pageSize?: number;
-    orderBy?: string;
-    orderDir?: "ASC" | "DESC";
-  } = {}
-): Promise<QueryResult> {
-  const { page = 1, pageSize = 50, orderBy, orderDir = "ASC" } = options;
-  const offset = (page - 1) * pageSize;
-
-  const start = Date.now();
-
-  // Get column info for type mapping
+  table: string
+): Promise<ColumnMeta[]> {
   const colInfo = await sql`
     SELECT column_name, data_type, udt_name
     FROM information_schema.columns
@@ -25,37 +39,114 @@ export async function queryTable(
     ORDER BY ordinal_position
   `;
 
-  const columns = colInfo.map((c) => ({
+  return colInfo.map((c) => ({
     name: c.column_name as string,
+    dataType: c.data_type as string,
+    udtName: c.udt_name as string,
     type: (c.udt_name as string) || (c.data_type as string),
   }));
+}
 
-  // Build and execute query
-  const schemaIdent = sql(schema);
-  const tableIdent = sql(table);
+function buildFilterClause(filter: TableFilterClause): string | null {
+  const column = quoteIdentifier(filter.column);
 
-  let rows: Record<string, unknown>[];
-  if (orderBy) {
-    const orderIdent = sql(orderBy);
-    if (orderDir === "DESC") {
-      rows = await sql`
-        SELECT * FROM ${schemaIdent}.${tableIdent}
-        ORDER BY ${orderIdent} DESC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `;
-    } else {
-      rows = await sql`
-        SELECT * FROM ${schemaIdent}.${tableIdent}
-        ORDER BY ${orderIdent} ASC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `;
-    }
-  } else {
-    rows = await sql`
-      SELECT * FROM ${schemaIdent}.${tableIdent}
-      LIMIT ${pageSize} OFFSET ${offset}
-    `;
+  if (filter.operator === "is_null") {
+    return `${column} IS NULL`;
   }
+
+  if (filter.operator === "is_not_null") {
+    return `${column} IS NOT NULL`;
+  }
+
+  if (!operatorNeedsValue(filter.operator) || filter.value === undefined) {
+    return null;
+  }
+
+  if (filter.operator === "contains") {
+    return `${column} ILIKE ${quoteValue(`%${escapeLikePattern(filter.value)}%`)} ESCAPE '\\'`;
+  }
+
+  if (filter.operator === "starts_with") {
+    return `${column} ILIKE ${quoteValue(`${escapeLikePattern(filter.value)}%`)} ESCAPE '\\'`;
+  }
+
+  const operator = filter.operator === "!=" ? "<>" : filter.operator;
+  const value = formatValueForSql(filter.value, filter.columnType, false);
+  return `${column} ${operator} ${value}`;
+}
+
+function buildWhereClause(
+  columns: QueryColumn[],
+  quickSearch?: string,
+  filters: TableFilterClause[] = []
+): string {
+  const clauses: string[] = [];
+
+  const search = quickSearch?.trim();
+  if (search) {
+    const searchableColumns = columns.filter((column) => isTextLikeType(column.type));
+    if (searchableColumns.length > 0) {
+      const pattern = quoteValue(`%${escapeLikePattern(search)}%`);
+      clauses.push(
+        `(${searchableColumns
+          .map((column) => `${quoteIdentifier(column.name)} ILIKE ${pattern} ESCAPE '\\'`)
+          .join(" OR ")})`
+      );
+    }
+  }
+
+  for (const filter of filters) {
+    const clause = buildFilterClause(filter);
+    if (clause) clauses.push(clause);
+  }
+
+  return clauses.length > 0 ? ` WHERE ${clauses.join(" AND ")}` : "";
+}
+
+export function buildTableQuerySql(
+  schema: string,
+  table: string,
+  columns: QueryColumn[],
+  options: TableQueryOptions = {}
+): string {
+  const {
+    page = 1,
+    pageSize = 50,
+    orderBy,
+    orderDir = "ASC",
+    quickSearch,
+    filters = [],
+  } = options;
+  const offset = (page - 1) * pageSize;
+  const whereClause = buildWhereClause(columns, quickSearch, filters);
+  const orderClause = orderBy
+    ? `ORDER BY ${quoteIdentifier(orderBy)} ${orderDir === "DESC" ? "DESC" : "ASC"}`
+    : "";
+
+  return [
+    `SELECT *`,
+    `FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}`,
+    whereClause ? whereClause.trim() : "",
+    orderClause,
+    `LIMIT ${pageSize} OFFSET ${offset}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function queryTable(
+  sql: Sql,
+  schema: string,
+  table: string,
+  options: TableQueryOptions = {}
+): Promise<QueryResult> {
+  const start = Date.now();
+
+  const columnMeta = await getColumnMetadata(sql, schema, table);
+  const columns = columnMeta.map((column) => ({ name: column.name, type: column.type }));
+  const queryText = buildTableQuerySql(schema, table, columns, options);
+
+  const rows = await sql.unsafe(queryText);
 
   const duration = Date.now() - start;
 
@@ -71,8 +162,24 @@ export async function getTableRowCount(
   sql: Sql,
   schema: string,
   table: string,
-  exact: boolean = false
+  options: {
+    exact?: boolean;
+    quickSearch?: string;
+    filters?: TableFilterClause[];
+  } = {}
 ): Promise<number> {
+  const { exact = false, quickSearch, filters = [] } = options;
+  const hasConstraints = Boolean(quickSearch?.trim()) || filters.length > 0;
+
+  if (hasConstraints) {
+    const columnMeta = await getColumnMetadata(sql, schema, table);
+    const whereClause = buildWhereClause(columnMeta, quickSearch, filters);
+    const result = await sql.unsafe(
+      `SELECT count(*)::int as count FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${whereClause}`
+    );
+    return result[0].count as number;
+  }
+
   if (exact) {
     const result = await sql`
       SELECT count(*)::int as count 

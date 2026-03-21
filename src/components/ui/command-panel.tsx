@@ -2,10 +2,11 @@ import React, { useState, useCallback, useMemo } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useTheme } from "../../theme";
 import { useUIStore } from "../../store/ui";
-import { useConnectionsStore } from "../../store/connections";
-import { useSchemaStore } from "../../store/schema";
-import { useTableDataStore } from "../../store/table-data";
-import { useQueryStore } from "../../store/query";
+import { useWorkspaceStore } from "../../store/workspaces";
+import {
+  closeWorkspaceWithUi,
+  openBlankQueryWorkspace,
+} from "../../utils/workspace-actions";
 import type { Dialog } from "../../store/ui";
 
 interface CommandItem {
@@ -70,29 +71,71 @@ function getCommands(
       description: "Exit the application",
       category: "System",
       shortcut: "Ctrl+C",
-      action: () => process.exit(0),
+      action: () => openDialog("confirm-quit"),
     },
   ];
 
   // Add screen-specific commands
   if (screen === "main") {
-    commands.push({
-      id: "disconnect",
-      label: "Disconnect",
-      description: "Disconnect from the current database",
-      category: "Connections",
-      shortcut: "Esc",
-      action: async () => {
-        closeDialog();
-        await useConnectionsStore.getState().disconnectCurrent();
-        useSchemaStore.getState().reset();
-        useTableDataStore.getState().reset();
-        useQueryStore.getState().reset();
-        const ui = useUIStore.getState();
-        ui.resetNavigation();
-        ui.setScreen("connections");
+    commands.push(
+      {
+        id: "disconnect",
+        label: "Disconnect",
+        description: "Disconnect from the current database",
+        category: "Connections",
+        shortcut: "Esc",
+        action: () => {
+          openDialog("confirm-disconnect");
+        },
       },
-    });
+      {
+        id: "new-query-tab",
+        label: "New Query Tab",
+        description: "Open a new blank query editor tab",
+        category: "Tabs",
+        shortcut: "Ctrl+T",
+        action: () => {
+          closeDialog();
+          openBlankQueryWorkspace();
+        },
+      },
+      {
+        id: "close-tab",
+        label: "Close Tab",
+        description: "Close the current tab",
+        category: "Tabs",
+        shortcut: "Ctrl+W",
+        action: () => {
+          closeDialog();
+          const ws = useWorkspaceStore.getState().getActiveWorkspace();
+          if (ws) {
+            closeWorkspaceWithUi(ws.id);
+          }
+        },
+      },
+      {
+        id: "next-tab",
+        label: "Next Tab",
+        description: "Switch to the next tab",
+        category: "Tabs",
+        shortcut: "Ctrl+N",
+        action: () => {
+          closeDialog();
+          useWorkspaceStore.getState().nextWorkspace();
+        },
+      },
+      {
+        id: "prev-tab",
+        label: "Previous Tab",
+        description: "Switch to the previous tab",
+        category: "Tabs",
+        shortcut: "Ctrl+P",
+        action: () => {
+          closeDialog();
+          useWorkspaceStore.getState().prevWorkspace();
+        },
+      }
+    );
   }
 
   return commands;
@@ -131,20 +174,6 @@ export function CommandPanel() {
     }
     return groups;
   }, [filteredCommands]);
-
-  // Flat list for keyboard navigation
-  const flatList = useMemo(() => {
-    const items: Array<{ type: "header"; category: string } | { type: "command"; command: CommandItem; index: number }> = [];
-    let cmdIndex = 0;
-    for (const [category, cmds] of Object.entries(grouped)) {
-      items.push({ type: "header", category });
-      for (const cmd of cmds) {
-        items.push({ type: "command", command: cmd, index: cmdIndex });
-        cmdIndex++;
-      }
-    }
-    return items;
-  }, [grouped]);
 
   // Get navigable command indices only
   const commandCount = filteredCommands.length;
@@ -235,7 +264,6 @@ export function CommandPanel() {
 
             for (const cmd of cmds) {
               const isCursor = cmdIdx === cursorIndex;
-              const currentIdx = cmdIdx;
               cmdIdx++;
 
               rows.push(

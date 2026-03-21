@@ -6,11 +6,12 @@ import { QueryEditor } from "./query-editor";
 import { QueryResults } from "./query-results";
 
 interface QueryPanelProps {
+  workspaceId: string;
   width: number;
   height: number;
 }
 
-export function QueryPanel({ width, height }: QueryPanelProps) {
+export function QueryPanel({ workspaceId, width, height }: QueryPanelProps) {
   const theme = useTheme();
   const { activePanel, activeDialog } = useUIStore();
   const queryFocused = activePanel === "query" && activeDialog === "none";
@@ -33,19 +34,21 @@ export function QueryPanel({ width, height }: QueryPanelProps) {
           paddingX: 1,
         }}
       >
-        <QueryEditor focused={queryFocused} width={width - 4} height={editorHeight - 3} />
+        <QueryEditor workspaceId={workspaceId} focused={queryFocused} width={width - 4} height={editorHeight - 3} />
         <box style={{ width: "100%", paddingTop: 1 }}>
           <KeybindBar
             bindings={[
               { key: "Ctrl+R", label: "Run" },
+              { key: "Ctrl+P/N", label: "Tabs" },
               { key: "Tab", label: "Next panel" },
-              { key: "Esc", label: "Close" },
+              { key: "Esc", label: "Sidebar" },
             ]}
           />
         </box>
       </box>
 
       <QueryResults
+        workspaceId={workspaceId}
         focused={resultsFocused}
         width={width}
         height={resultsHeight}

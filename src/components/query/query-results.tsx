@@ -6,6 +6,7 @@ import { useUIStore } from "../../store/ui";
 import { formatCellValue, getTypeColor, truncate } from "../../utils/format";
 
 interface QueryResultsProps {
+  workspaceId: string;
   focused: boolean;
   width: number;
   height: number;
@@ -31,10 +32,10 @@ function computeColumnWidths(
   return widths.map((width) => Math.min(Math.max(width, 6), 32));
 }
 
-export function QueryResults({ focused, width, height }: QueryResultsProps) {
+export function QueryResults({ workspaceId, focused, width, height }: QueryResultsProps) {
   const theme = useTheme();
   const { activeDialog, setActivePanel } = useUIStore();
-  const { result, isExecuting, error } = useQueryStore();
+  const { result, isExecuting, error } = useQueryStore().getWorkspaceState(workspaceId);
   const [selectedRow, setSelectedRow] = useState(0);
   const [selectedCol, setSelectedCol] = useState(0);
   const [scrollOffsetY, setScrollOffsetY] = useState(0);

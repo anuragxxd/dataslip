@@ -119,7 +119,7 @@ export function SchemaSearch() {
       onSelect={(option) => {
         closeDialog();
         setTimeout(() => {
-          void openItem(option.value, { mode: "grid" });
+          void openItem(option.value);
         }, 0);
       }}
     />

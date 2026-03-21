@@ -7,6 +7,7 @@ import { dracula } from "./themes/dracula";
 import { catppuccin } from "./themes/catppuccin";
 import { nord } from "./themes/nord";
 import { gruvbox } from "./themes/gruvbox";
+import { pacman } from "./themes/pacman";
 import { rosePine } from "./themes/rose-pine";
 
 export const DEFAULT_THEME_ID = "opencode";
@@ -20,6 +21,7 @@ export const themes: ThemeDefinition[] = [
   catppuccin,
   nord,
   gruvbox,
+  pacman,
   rosePine,
 ];
 

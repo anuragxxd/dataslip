@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { QueryResult } from "../db/types";
+import type { QueryResult, TableFilterClause, TableFilterOperator } from "../db/types";
 import { getActiveSql } from "../db/connection";
 import * as query from "../db/query";
 import {
@@ -8,7 +8,10 @@ import {
   buildUpdateQuery,
   formatDisplayValue,
 } from "../utils/sql";
+import { generateId } from "../utils/format";
 import { showToast } from "../components/ui/toast";
+
+// ─── Edit state (per-workspace) ───────────────────────────────
 
 interface EditState {
   editMode: boolean;
@@ -17,7 +20,16 @@ interface EditState {
   editIsNull: boolean;
 }
 
-interface TableDataState {
+const defaultEditState: EditState = {
+  editMode: false,
+  editValue: "",
+  editOriginalValue: undefined,
+  editIsNull: false,
+};
+
+// ─── Per-workspace table state ────────────────────────────────
+
+export interface TableWorkspaceState {
   // Current table
   currentSchema: string | null;
   currentTable: string | null;
@@ -38,6 +50,10 @@ interface TableDataState {
   orderBy: string | null;
   orderDir: "ASC" | "DESC";
 
+  // Search / filters
+  quickSearch: string;
+  filters: TableFilterClause[];
+
   // Grid navigation
   selectedRow: number;
   selectedCol: number;
@@ -47,31 +63,107 @@ interface TableDataState {
   isLoading: boolean;
   error: string | null;
 
+  // Invalid (table no longer exists after restore)
+  isInvalid: boolean;
+
   // Inline editing
   edit: EditState;
+}
 
-  // Actions
-  loadTable: (schema: string, table: string, type?: "table" | "view") => Promise<void>;
-  reloadCurrent: () => Promise<void>;
-  setPage: (page: number) => Promise<void>;
-  setPageSize: (size: number) => Promise<void>;
-  setSort: (column: string) => Promise<void>;
-  moveSelection: (rowDelta: number, colDelta: number) => void;
-  setSelectedRow: (row: number) => void;
-  setSelectedCol: (col: number) => void;
-  setScrollOffsetX: (offset: number) => void;
-  reset: () => void;
+function createDefaultTableState(): TableWorkspaceState {
+  return {
+    currentSchema: null,
+    currentTable: null,
+    currentTableType: null,
+    primaryKeyColumns: [],
+    result: null,
+    totalRows: 0,
+    page: 1,
+    pageSize: 50,
+    orderBy: null,
+    orderDir: "ASC",
+    quickSearch: "",
+    filters: [],
+    selectedRow: 0,
+    selectedCol: 0,
+    scrollOffsetX: 0,
+    isLoading: false,
+    error: null,
+    isInvalid: false,
+    edit: { ...defaultEditState },
+  };
+}
+
+function getQueryOptions(ws: TableWorkspaceState) {
+  return {
+    page: ws.page,
+    pageSize: ws.pageSize,
+    orderBy: ws.orderBy || undefined,
+    orderDir: ws.orderDir,
+    quickSearch: ws.quickSearch,
+    filters: ws.filters,
+  };
+}
+
+async function fetchWorkspaceRows(ws: TableWorkspaceState) {
+  const sql = getActiveSql();
+  if (!sql || !ws.currentSchema || !ws.currentTable) {
+    return null;
+  }
+
+  const [result, totalRows] = await Promise.all([
+    query.queryTable(sql, ws.currentSchema, ws.currentTable, getQueryOptions(ws)),
+    query.getTableRowCount(sql, ws.currentSchema, ws.currentTable, {
+      quickSearch: ws.quickSearch,
+      filters: ws.filters,
+    }),
+  ]);
+
+  return { result, totalRows };
+}
+
+// ─── Store ────────────────────────────────────────────────────
+
+interface TableDataStoreState {
+  byWorkspaceId: Record<string, TableWorkspaceState>;
+
+  // Actions — all take workspaceId
+  initWorkspace: (workspaceId: string) => void;
+  removeWorkspace: (workspaceId: string) => void;
+  getWorkspaceState: (workspaceId: string) => TableWorkspaceState;
+
+  loadTable: (
+    workspaceId: string,
+    schema: string,
+    table: string,
+    type?: "table" | "view"
+  ) => Promise<void>;
+  applyViewConstraints: (
+    workspaceId: string,
+    payload: { quickSearch: string; filters: TableFilterClause[] }
+  ) => Promise<void>;
+  applyQuickSearch: (workspaceId: string, search: string) => Promise<void>;
+  applyFilters: (workspaceId: string, filters: TableFilterClause[]) => Promise<void>;
+  clearSearchAndFilters: (workspaceId: string) => Promise<void>;
+  addFilterFromSelectedCell: (
+    workspaceId: string,
+    operator?: Extract<TableFilterOperator, "=" | "!=" >
+  ) => Promise<void>;
+  setPage: (workspaceId: string, page: number) => Promise<void>;
+  setPageSize: (workspaceId: string, size: number) => Promise<void>;
+  setSort: (workspaceId: string, column: string) => Promise<void>;
+  reloadCurrent: (workspaceId: string) => Promise<void>;
+  moveSelection: (workspaceId: string, rowDelta: number, colDelta: number) => void;
+  setSelectedRow: (workspaceId: string, row: number) => void;
+  setSelectedCol: (workspaceId: string, col: number) => void;
+  setScrollOffsetX: (workspaceId: string, offset: number) => void;
 
   // Edit actions
-  startEdit: () => boolean;
-  setEditValue: (value: string) => void;
-  toggleEditNull: () => void;
-  cancelEdit: () => void;
-  /**
-   * Validate the edit and return the confirmation data if valid.
-   * Returns null if validation fails (shows toast).
-   */
-  prepareEditConfirm: () => {
+  startEdit: (workspaceId: string) => boolean;
+  setEditValue: (workspaceId: string, value: string) => void;
+  toggleEditNull: (workspaceId: string) => void;
+  cancelEdit: (workspaceId: string) => void;
+  prepareEditConfirm: (workspaceId: string) => {
     sql: string;
     column: string;
     columnType: string;
@@ -81,290 +173,452 @@ interface TableDataState {
     oldDisplay: string;
     newDisplay: string;
   } | null;
-  /**
-   * Apply a successful edit to the in-memory result without re-fetching.
-   */
-  applyEdit: (columnName: string, newValue: string, isNull: boolean) => void;
+  applyEdit: (workspaceId: string, columnName: string, newValue: string, isNull: boolean) => void;
+
+  reset: () => void;
 }
 
-const defaultEditState: EditState = {
-  editMode: false,
-  editValue: "",
-  editOriginalValue: undefined,
-  editIsNull: false,
-};
+// Helper to update a workspace's state immutably
+function updateWs(
+  state: TableDataStoreState,
+  workspaceId: string,
+  patch: Partial<TableWorkspaceState>
+): Partial<TableDataStoreState> {
+  const ws = state.byWorkspaceId[workspaceId] || createDefaultTableState();
+  return {
+    byWorkspaceId: {
+      ...state.byWorkspaceId,
+      [workspaceId]: { ...ws, ...patch },
+    },
+  };
+}
 
-export const useTableDataStore = create<TableDataState>((set, get) => ({
-  currentSchema: null,
-  currentTable: null,
-  currentTableType: null,
-  primaryKeyColumns: [],
-  result: null,
-  totalRows: 0,
-  page: 1,
-  pageSize: 50,
-  orderBy: null,
-  orderDir: "ASC",
-  selectedRow: 0,
-  selectedCol: 0,
-  scrollOffsetX: 0,
-  isLoading: false,
-  error: null,
-  edit: { ...defaultEditState },
+export const useTableDataStore = create<TableDataStoreState>((set, get) => ({
+  byWorkspaceId: {},
 
-  loadTable: async (schema, table, type = "table") => {
+  initWorkspace: (workspaceId) => {
+    if (get().byWorkspaceId[workspaceId]) return;
+    set((state) => ({
+      byWorkspaceId: {
+        ...state.byWorkspaceId,
+        [workspaceId]: createDefaultTableState(),
+      },
+    }));
+  },
+
+  removeWorkspace: (workspaceId) => {
+    set((state) => {
+      const { [workspaceId]: _, ...rest } = state.byWorkspaceId;
+      return { byWorkspaceId: rest };
+    });
+  },
+
+  getWorkspaceState: (workspaceId) => {
+    return get().byWorkspaceId[workspaceId] || createDefaultTableState();
+  },
+
+  loadTable: async (workspaceId, schema, table, type = "table") => {
     const sql = getActiveSql();
     if (!sql) return;
 
-    set({
+    set((state) => updateWs(state, workspaceId, {
       currentSchema: schema,
       currentTable: table,
       currentTableType: type,
       primaryKeyColumns: [],
       isLoading: true,
       error: null,
+      isInvalid: false,
       page: 1,
+      quickSearch: "",
+      filters: [],
       selectedRow: 0,
       selectedCol: 0,
       scrollOffsetX: 0,
       orderBy: null,
       orderDir: "ASC",
       edit: { ...defaultEditState },
-    });
+    }));
 
     try {
+      const ws = get().byWorkspaceId[workspaceId]!;
       const [result, totalRows, pkColumns] = await Promise.all([
-        query.queryTable(sql, schema, table, {
-          page: 1,
-          pageSize: get().pageSize,
+        query.queryTable(sql, schema, table, getQueryOptions(ws)),
+        query.getTableRowCount(sql, schema, table, {
+          quickSearch: ws.quickSearch,
+          filters: ws.filters,
         }),
-        query.getTableRowCount(sql, schema, table),
         type === "table"
           ? query.getPrimaryKeyColumns(sql, schema, table)
           : Promise.resolve([]),
       ]);
-      set({ result, totalRows, primaryKeyColumns: pkColumns, isLoading: false });
+      set((state) => updateWs(state, workspaceId, {
+        result,
+        totalRows,
+        primaryKeyColumns: pkColumns,
+        isLoading: false,
+      }));
     } catch (err: any) {
-      set({ isLoading: false, error: err.message || String(err) });
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message || String(err),
+        isInvalid: true,
+      }));
     }
   },
 
-  reloadCurrent: async () => {
-    const {
-      currentSchema,
-      currentTable,
-      currentTableType,
-      page,
-      pageSize,
-      orderBy,
-      orderDir,
-    } = get();
-    const sql = getActiveSql();
-    if (!sql || !currentSchema || !currentTable) return;
+  applyViewConstraints: async (workspaceId, payload) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws?.currentSchema || !ws.currentTable) return;
 
-    set({
+    set((state) => updateWs(state, workspaceId, {
+      quickSearch: payload.quickSearch.trim(),
+      filters: payload.filters,
+      page: 1,
+      selectedRow: 0,
+      selectedCol: 0,
+      scrollOffsetX: 0,
+      isLoading: true,
+      error: null,
+      edit: { ...defaultEditState },
+    }));
+
+    try {
+      const next = get().byWorkspaceId[workspaceId]!;
+      const loaded = await fetchWorkspaceRows(next);
+      if (!loaded) return;
+      set((state) => updateWs(state, workspaceId, {
+        result: loaded.result,
+        totalRows: loaded.totalRows,
+        isLoading: false,
+        isInvalid: false,
+      }));
+    } catch (err: any) {
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message || String(err),
+      }));
+    }
+  },
+
+  applyQuickSearch: async (workspaceId, search) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    await get().applyViewConstraints(workspaceId, {
+      quickSearch: search,
+      filters: ws.filters,
+    });
+  },
+
+  applyFilters: async (workspaceId, filters) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    await get().applyViewConstraints(workspaceId, {
+      quickSearch: ws.quickSearch,
+      filters,
+    });
+  },
+
+  clearSearchAndFilters: async (workspaceId) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws?.currentSchema || !ws.currentTable) return;
+
+    set((state) => updateWs(state, workspaceId, {
+      quickSearch: "",
+      filters: [],
+      page: 1,
+      selectedRow: 0,
+      selectedCol: 0,
+      scrollOffsetX: 0,
+      isLoading: true,
+      error: null,
+      edit: { ...defaultEditState },
+    }));
+
+    try {
+      const next = get().byWorkspaceId[workspaceId]!;
+      const loaded = await fetchWorkspaceRows(next);
+      if (!loaded) return;
+      set((state) => updateWs(state, workspaceId, {
+        result: loaded.result,
+        totalRows: loaded.totalRows,
+        isLoading: false,
+        isInvalid: false,
+      }));
+    } catch (err: any) {
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message || String(err),
+      }));
+    }
+  },
+
+  addFilterFromSelectedCell: async (workspaceId, operator = "=") => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws?.result || !ws.currentSchema || !ws.currentTable) return;
+
+    const row = ws.result.rows[ws.selectedRow];
+    const column = ws.result.columns[ws.selectedCol];
+    if (!row || !column) {
+      showToast("No cell selected", "warning");
+      return;
+    }
+
+    const cellValue = row[column.name];
+    const nextFilter: TableFilterClause = {
+      id: generateId(),
+      column: column.name,
+      columnType: column.type,
+      operator:
+        cellValue === null || cellValue === undefined
+          ? operator === "!="
+            ? "is_not_null"
+            : "is_null"
+          : operator,
+      value:
+        cellValue === null || cellValue === undefined ? undefined : cellValueToEditString(cellValue),
+    };
+
+    const filters = [...ws.filters, nextFilter];
+    await get().applyFilters(workspaceId, filters);
+    showToast(`Filtered by ${column.name}`, "info");
+  },
+
+  setPage: async (workspaceId, page) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    const sql = getActiveSql();
+    if (!sql || !ws.currentSchema || !ws.currentTable) return;
+
+    set((state) => updateWs(state, workspaceId, {
+      isLoading: true,
+      error: null,
+      page,
+      selectedRow: 0,
+      edit: { ...defaultEditState },
+    }));
+
+    try {
+      const next = { ...ws, page };
+      const loaded = await fetchWorkspaceRows(next);
+      if (!loaded) return;
+      set((state) => updateWs(state, workspaceId, {
+        result: loaded.result,
+        totalRows: loaded.totalRows,
+        isLoading: false,
+        isInvalid: false,
+      }));
+    } catch (err: any) {
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message,
+      }));
+    }
+  },
+
+  setPageSize: async (workspaceId, size) => {
+    set((state) => updateWs(state, workspaceId, {
+      pageSize: size,
+      page: 1,
+      selectedRow: 0,
+      edit: { ...defaultEditState },
+      isLoading: true,
+      error: null,
+    }));
+    const ws = get().byWorkspaceId[workspaceId];
+    if (ws?.currentSchema && ws?.currentTable) {
+      try {
+        const next = get().byWorkspaceId[workspaceId]!;
+        const loaded = await fetchWorkspaceRows(next);
+        if (!loaded) return;
+        set((state) => updateWs(state, workspaceId, {
+          result: loaded.result,
+          totalRows: loaded.totalRows,
+          isLoading: false,
+        }));
+      } catch (err: any) {
+        set((state) => updateWs(state, workspaceId, {
+          isLoading: false,
+          error: err.message || String(err),
+        }));
+      }
+    }
+  },
+
+  setSort: async (workspaceId, column) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+
+    let orderDir: "ASC" | "DESC" = "ASC";
+    if (ws.orderBy === column) {
+      orderDir = ws.orderDir === "ASC" ? "DESC" : "ASC";
+    }
+    set((state) => updateWs(state, workspaceId, {
+      orderBy: column,
+      orderDir,
+      page: 1,
+      edit: { ...defaultEditState },
+    }));
+
+    const sql = getActiveSql();
+    if (!sql || !ws.currentSchema || !ws.currentTable) return;
+
+    set((state) => updateWs(state, workspaceId, { isLoading: true, error: null }));
+    try {
+      const next = { ...ws, orderBy: column, orderDir, page: 1 };
+      const loaded = await fetchWorkspaceRows(next);
+      if (!loaded) return;
+      set((state) => updateWs(state, workspaceId, {
+        result: loaded.result,
+        totalRows: loaded.totalRows,
+        isLoading: false,
+        isInvalid: false,
+      }));
+    } catch (err: any) {
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message,
+      }));
+    }
+  },
+
+  reloadCurrent: async (workspaceId) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    const sql = getActiveSql();
+    if (!sql || !ws.currentSchema || !ws.currentTable) return;
+
+    set((state) => updateWs(state, workspaceId, {
       isLoading: true,
       error: null,
       selectedRow: 0,
       selectedCol: 0,
       scrollOffsetX: 0,
       edit: { ...defaultEditState },
-    });
+    }));
 
     try {
-      const [result, totalRows, pkColumns] = await Promise.all([
-        query.queryTable(sql, currentSchema, currentTable, {
-          page,
-          pageSize,
-          orderBy: orderBy || undefined,
-          orderDir,
-        }),
-        query.getTableRowCount(sql, currentSchema, currentTable),
-        currentTableType === "table"
-          ? query.getPrimaryKeyColumns(sql, currentSchema, currentTable)
+      const [loaded, pkColumns] = await Promise.all([
+        fetchWorkspaceRows(ws),
+        ws.currentTableType === "table"
+          ? query.getPrimaryKeyColumns(sql, ws.currentSchema, ws.currentTable)
           : Promise.resolve([]),
       ]);
-
-      set({
-        result,
-        totalRows,
+      if (!loaded) return;
+      set((state) => updateWs(state, workspaceId, {
+        result: loaded.result,
+        totalRows: loaded.totalRows,
         primaryKeyColumns: pkColumns,
         isLoading: false,
-      });
+        isInvalid: false,
+      }));
     } catch (err: any) {
-      set({ isLoading: false, error: err.message || String(err) });
+      set((state) => updateWs(state, workspaceId, {
+        isLoading: false,
+        error: err.message || String(err),
+      }));
     }
   },
 
-  setPage: async (page) => {
-    const { currentSchema, currentTable, pageSize, orderBy, orderDir } = get();
-    const sql = getActiveSql();
-    if (!sql || !currentSchema || !currentTable) return;
+  moveSelection: (workspaceId, rowDelta, colDelta) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws?.result) return;
 
-    set({ isLoading: true, page, selectedRow: 0, edit: { ...defaultEditState } });
-    try {
-      const result = await query.queryTable(sql, currentSchema, currentTable, {
-        page,
-        pageSize,
-        orderBy: orderBy || undefined,
-        orderDir,
-      });
-      set({ result, isLoading: false });
-    } catch (err: any) {
-      set({ isLoading: false, error: err.message });
-    }
+    const maxRow = ws.result.rows.length - 1;
+    const maxCol = ws.result.columns.length - 1;
+    const newRow = Math.max(0, Math.min(maxRow, ws.selectedRow + rowDelta));
+    const newCol = Math.max(0, Math.min(maxCol, ws.selectedCol + colDelta));
+
+    set((state) => updateWs(state, workspaceId, {
+      selectedRow: newRow,
+      selectedCol: newCol,
+    }));
   },
 
-  setPageSize: async (size) => {
-    set({ pageSize: size, page: 1 });
-    const { currentSchema, currentTable, currentTableType } = get();
-    if (currentSchema && currentTable) {
-      await get().loadTable(currentSchema, currentTable, currentTableType || "table");
-    }
+  setSelectedRow: (workspaceId, row) => {
+    set((state) => updateWs(state, workspaceId, { selectedRow: row }));
   },
 
-  setSort: async (column) => {
-    const state = get();
-    let orderDir: "ASC" | "DESC" = "ASC";
-    if (state.orderBy === column) {
-      orderDir = state.orderDir === "ASC" ? "DESC" : "ASC";
-    }
-    set({ orderBy: column, orderDir, edit: { ...defaultEditState } });
-
-    const sql = getActiveSql();
-    if (!sql || !state.currentSchema || !state.currentTable) return;
-
-    set({ isLoading: true });
-    try {
-      const result = await query.queryTable(
-        sql,
-        state.currentSchema,
-        state.currentTable,
-        {
-          page: state.page,
-          pageSize: state.pageSize,
-          orderBy: column,
-          orderDir,
-        }
-      );
-      set({ result, isLoading: false });
-    } catch (err: any) {
-      set({ isLoading: false, error: err.message });
-    }
+  setSelectedCol: (workspaceId, col) => {
+    set((state) => updateWs(state, workspaceId, { selectedCol: col }));
   },
 
-  moveSelection: (rowDelta, colDelta) => {
-    const { result, selectedRow, selectedCol } = get();
-    if (!result) return;
-
-    const maxRow = result.rows.length - 1;
-    const maxCol = result.columns.length - 1;
-
-    const newRow = Math.max(0, Math.min(maxRow, selectedRow + rowDelta));
-    const newCol = Math.max(0, Math.min(maxCol, selectedCol + colDelta));
-
-    set({ selectedRow: newRow, selectedCol: newCol });
-  },
-
-  setSelectedRow: (row) => set({ selectedRow: row }),
-  setSelectedCol: (col) => set({ selectedCol: col }),
-  setScrollOffsetX: (offset) => set({ scrollOffsetX: offset }),
-
-  reset: () => {
-    set({
-      currentSchema: null,
-      currentTable: null,
-      currentTableType: null,
-      primaryKeyColumns: [],
-      result: null,
-      totalRows: 0,
-      page: 1,
-      selectedRow: 0,
-      selectedCol: 0,
-      scrollOffsetX: 0,
-      orderBy: null,
-      orderDir: "ASC",
-      isLoading: false,
-      error: null,
-      edit: { ...defaultEditState },
-    });
+  setScrollOffsetX: (workspaceId, offset) => {
+    set((state) => updateWs(state, workspaceId, { scrollOffsetX: offset }));
   },
 
   // ─── Edit Actions ──────────────────────────────────────────
 
-  startEdit: () => {
-    const { currentTableType, primaryKeyColumns, result, selectedRow, selectedCol } =
-      get();
+  startEdit: (workspaceId) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return false;
 
-    if (currentTableType !== "table") {
+    if (ws.currentTableType !== "table") {
       showToast("Cannot edit views", "warning");
       return false;
     }
 
-    if (primaryKeyColumns.length === 0) {
+    if (ws.primaryKeyColumns.length === 0) {
       showToast("Cannot edit: table has no primary key", "warning");
       return false;
     }
 
-    if (!result || result.rows.length === 0) return false;
+    if (!ws.result || ws.result.rows.length === 0) return false;
 
-    const row = result.rows[selectedRow];
-    const col = result.columns[selectedCol];
+    const row = ws.result.rows[ws.selectedRow];
+    const col = ws.result.columns[ws.selectedCol];
     if (!row || !col) return false;
 
     const originalValue = row[col.name];
     const isNull = originalValue === null || originalValue === undefined;
 
-    set({
+    set((state) => updateWs(state, workspaceId, {
       edit: {
         editMode: true,
         editValue: isNull ? "" : cellValueToEditString(originalValue),
         editOriginalValue: originalValue,
         editIsNull: isNull,
       },
-    });
+    }));
     return true;
   },
 
-  setEditValue: (value) => {
-    set((state) => ({
-      edit: { ...state.edit, editValue: value, editIsNull: false },
+  setEditValue: (workspaceId, value) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    set((state) => updateWs(state, workspaceId, {
+      edit: { ...ws.edit, editValue: value, editIsNull: false },
     }));
   },
 
-  toggleEditNull: () => {
-    set((state) => ({
+  toggleEditNull: (workspaceId) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws) return;
+    set((state) => updateWs(state, workspaceId, {
       edit: {
-        ...state.edit,
-        editIsNull: !state.edit.editIsNull,
-        editValue: !state.edit.editIsNull ? "" : state.edit.editValue,
+        ...ws.edit,
+        editIsNull: !ws.edit.editIsNull,
+        editValue: !ws.edit.editIsNull ? "" : ws.edit.editValue,
       },
     }));
   },
 
-  cancelEdit: () => {
-    set({ edit: { ...defaultEditState } });
+  cancelEdit: (workspaceId) => {
+    set((state) => updateWs(state, workspaceId, {
+      edit: { ...defaultEditState },
+    }));
   },
 
-  prepareEditConfirm: () => {
-    const {
-      currentSchema,
-      currentTable,
-      primaryKeyColumns,
-      result,
-      selectedRow,
-      selectedCol,
-      edit,
-    } = get();
+  prepareEditConfirm: (workspaceId) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws || !ws.currentSchema || !ws.currentTable || !ws.result) return null;
 
-    if (!currentSchema || !currentTable || !result) return null;
-
-    const row = result.rows[selectedRow];
-    const col = result.columns[selectedCol];
+    const row = ws.result.rows[ws.selectedRow];
+    const col = ws.result.columns[ws.selectedCol];
     if (!row || !col) return null;
 
     // Check that all primary key columns have non-null values for this row
-    const nullPk = primaryKeyColumns.find(
+    const nullPk = ws.primaryKeyColumns.find(
       (pkCol) => row[pkCol] === null || row[pkCol] === undefined
     );
     if (nullPk) {
@@ -374,9 +628,9 @@ export const useTableDataStore = create<TableDataState>((set, get) => ({
 
     // Validate the value
     const validationError = validateValueForType(
-      edit.editValue,
+      ws.edit.editValue,
       col.type,
-      edit.editIsNull
+      ws.edit.editIsNull
     );
     if (validationError) {
       showToast(validationError, "error");
@@ -384,31 +638,31 @@ export const useTableDataStore = create<TableDataState>((set, get) => ({
     }
 
     // Check if value actually changed
-    const oldValue = edit.editOriginalValue;
+    const oldValue = ws.edit.editOriginalValue;
     const oldIsNull = oldValue === null || oldValue === undefined;
-    if (edit.editIsNull && oldIsNull) {
+    if (ws.edit.editIsNull && oldIsNull) {
       showToast("No change — value is still NULL", "info");
-      set({ edit: { ...defaultEditState } });
+      set((state) => updateWs(state, workspaceId, { edit: { ...defaultEditState } }));
       return null;
     }
     if (
-      !edit.editIsNull &&
+      !ws.edit.editIsNull &&
       !oldIsNull &&
-      edit.editValue === cellValueToEditString(oldValue)
+      ws.edit.editValue === cellValueToEditString(oldValue)
     ) {
       showToast("No change", "info");
-      set({ edit: { ...defaultEditState } });
+      set((state) => updateWs(state, workspaceId, { edit: { ...defaultEditState } }));
       return null;
     }
 
     const sqlQuery = buildUpdateQuery(
-      currentSchema,
-      currentTable,
+      ws.currentSchema,
+      ws.currentTable,
       col.name,
       col.type,
-      edit.editValue,
-      edit.editIsNull,
-      primaryKeyColumns,
+      ws.edit.editValue,
+      ws.edit.editIsNull,
+      ws.primaryKeyColumns,
       row
     );
 
@@ -417,32 +671,27 @@ export const useTableDataStore = create<TableDataState>((set, get) => ({
       column: col.name,
       columnType: col.type,
       oldValue,
-      newValue: edit.editValue,
-      isNull: edit.editIsNull,
+      newValue: ws.edit.editValue,
+      isNull: ws.edit.editIsNull,
       oldDisplay: formatDisplayValue(oldValue),
-      newDisplay: edit.editIsNull ? "NULL" : formatDisplayValue(edit.editValue),
+      newDisplay: ws.edit.editIsNull ? "NULL" : formatDisplayValue(ws.edit.editValue),
     };
   },
 
-  applyEdit: (columnName, newValue, isNull) => {
-    const { result, selectedRow } = get();
-    if (!result) return;
+  applyEdit: (workspaceId, columnName, newValue, isNull) => {
+    const ws = get().byWorkspaceId[workspaceId];
+    if (!ws?.result) return;
 
-    const updatedRows = [...result.rows];
-    const updatedRow = { ...updatedRows[selectedRow] };
+    const updatedRows = [...ws.result.rows];
+    const updatedRow = { ...updatedRows[ws.selectedRow] };
 
     if (isNull) {
       updatedRow[columnName] = null;
     } else {
-      // Try to preserve the original type
-      const col = result.columns.find((c) => c.name === columnName);
+      const col = ws.result.columns.find((c) => c.name === columnName);
       const t = col?.type.toLowerCase() || "";
 
-      if (
-        t.includes("int") ||
-        t === "serial" ||
-        t === "bigserial"
-      ) {
+      if (t.includes("int") || t === "serial" || t === "bigserial") {
         updatedRow[columnName] = parseInt(newValue, 10);
       } else if (
         t.includes("float") ||
@@ -466,10 +715,12 @@ export const useTableDataStore = create<TableDataState>((set, get) => ({
       }
     }
 
-    updatedRows[selectedRow] = updatedRow;
-    set({
-      result: { ...result, rows: updatedRows },
+    updatedRows[ws.selectedRow] = updatedRow;
+    set((state) => updateWs(state, workspaceId, {
+      result: { ...ws.result!, rows: updatedRows },
       edit: { ...defaultEditState },
-    });
+    }));
   },
+
+  reset: () => set({ byWorkspaceId: {} }),
 }));

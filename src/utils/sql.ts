@@ -1,3 +1,5 @@
+import type { TableFilterClause, TableFilterOperator } from "../db/types";
+
 export function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, '""')}"`;
 }
@@ -29,9 +31,88 @@ function isFloatType(columnType: string): boolean {
   );
 }
 
-function isBooleanType(columnType: string): boolean {
+export function isBooleanType(columnType: string): boolean {
   const t = columnType.toLowerCase();
   return t === "bool" || t === "boolean";
+}
+
+export function isNumericType(columnType: string): boolean {
+  return isIntegerType(columnType) || isFloatType(columnType);
+}
+
+export function isDateLikeType(columnType: string): boolean {
+  const t = columnType.toLowerCase();
+  return (
+    t.includes("timestamp") ||
+    t.includes("date") ||
+    t.includes("time") ||
+    t.includes("interval")
+  );
+}
+
+export function isTextLikeType(columnType: string): boolean {
+  const t = columnType.toLowerCase();
+  return (
+    t.includes("char") ||
+    t.includes("text") ||
+    t === "varchar" ||
+    t === "bpchar" ||
+    t === "citext" ||
+    t === "name" ||
+    t === "uuid"
+  );
+}
+
+export function operatorNeedsValue(operator: TableFilterOperator): boolean {
+  return operator !== "is_null" && operator !== "is_not_null";
+}
+
+export function getFilterOperators(columnType: string): TableFilterOperator[] {
+  if (isTextLikeType(columnType)) {
+    return [
+      "contains",
+      "starts_with",
+      "=",
+      "!=",
+      "is_null",
+      "is_not_null",
+    ];
+  }
+
+  if (isNumericType(columnType) || isDateLikeType(columnType)) {
+    return ["=", "!=", ">", ">=", "<", "<=", "is_null", "is_not_null"];
+  }
+
+  if (isBooleanType(columnType)) {
+    return ["=", "!=", "is_null", "is_not_null"];
+  }
+
+  return ["=", "!=", "contains", "starts_with", "is_null", "is_not_null"];
+}
+
+export function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+export function formatFilterClauseLabel(clause: TableFilterClause): string {
+  if (clause.operator === "is_null") {
+    return `${clause.column} is null`;
+  }
+
+  if (clause.operator === "is_not_null") {
+    return `${clause.column} is not null`;
+  }
+
+  if (clause.operator === "starts_with") {
+    return `${clause.column} starts with ${clause.value ?? ""}`;
+  }
+
+  return `${clause.column} ${clause.operator} ${clause.value ?? ""}`;
+}
+
+export function formatFiltersSummary(filters: TableFilterClause[]): string {
+  if (filters.length === 0) return "";
+  return filters.map((filter) => formatFilterClauseLabel(filter)).join(", ");
 }
 
 const INTEGER_RE = /^-?\d+$/;

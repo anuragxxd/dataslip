@@ -9,9 +9,13 @@ export type Dialog =
   | "connection-edit"
   | "help"
   | "confirm-delete"
+  | "confirm-disconnect"
+  | "confirm-quit"
   | "theme-picker"
   | "command-panel"
   | "schema-search"
+  | "table-filters"
+  | "table-filter-preview"
   | "edit-confirm";
 
 interface UIState {

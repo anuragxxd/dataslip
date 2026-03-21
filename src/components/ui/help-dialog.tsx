@@ -1,62 +1,14 @@
-import React from "react";
 import { useKeyboard } from "@opentui/react";
 import { useTheme } from "../../theme";
 import { useUIStore } from "../../store/ui";
 import { Dialog } from "./dialog";
 
-const KEYBINDS = [
-  { section: "General" },
+const COMMON_SHORTCUTS = [
+  { key: "?", desc: "Open this help" },
   { key: "Ctrl+K", desc: "Open command panel" },
-  { key: "Tab", desc: "Switch between sidebar and data grid" },
-  { key: "Esc", desc: "Go back / close dialog" },
-  { key: "Ctrl+C", desc: "Exit DataSlip" },
-  { key: "/", desc: "Search schemas, tables, columns" },
-  { section: "Schema Tree (Sidebar)" },
-  { key: "j/k or ↑/↓", desc: "Navigate up/down" },
-  { key: "Enter/l/→", desc: "Expand node / open table" },
-  { key: "h/←", desc: "Collapse node" },
-  { section: "Data Grid" },
-  { key: "h/j/k/l", desc: "Navigate cells (left/down/up/right)" },
-  { key: "Tab", desc: "Switch focus between tree and grid" },
-  { key: "Enter", desc: "Edit selected cell (tables with PK)" },
-  { key: "n/p", desc: "Next/previous page" },
-  { key: "PgDn/PgUp", desc: "Next/previous page" },
-  { key: "r", desc: "Reload current table" },
-  { key: "s", desc: "Sort by current column" },
-  { key: "g/G", desc: "Go to first/last row" },
-  { section: "Cell Editing" },
-  { key: "Enter", desc: "Confirm edit (opens SQL preview)" },
-  { key: "Esc", desc: "Cancel edit" },
-  { key: "Ctrl+N", desc: "Toggle NULL value" },
-  { section: "Query Editor" },
-  { key: "q", desc: "Open query editor" },
-  { key: "Ctrl+R", desc: "Run query" },
-  { key: "Ctrl+Enter", desc: "Alternate run shortcut" },
-  { key: "Esc", desc: "Close query editor" },
-  { key: "Tab", desc: "Cycle focus: tree -> query -> results" },
-  { section: "Query Results" },
-  { key: "q", desc: "Focus query editor" },
-  { key: "j/k or ↑/↓", desc: "Move between rows" },
-  { key: "h/l or ←/→", desc: "Move between columns" },
-  { key: "h/← on first col", desc: "Move focus back to query editor" },
-  { key: "g/G", desc: "Go to first/last result row" },
-  { key: "Tab", desc: "Go to next panel" },
-  { section: "Connection Screen" },
-  { key: "n", desc: "New connection" },
-  { key: "e", desc: "Edit selected connection" },
-  { key: "d", desc: "Delete selected connection" },
-  { key: "Enter", desc: "Connect to selected" },
-  { section: "Connection Form" },
-  { key: "Tab/Shift+Tab", desc: "Next/previous field" },
-  { key: "Enter", desc: "Next field / Save" },
-  { key: "Ctrl+S", desc: "Save connection" },
-  { key: "Ctrl+T", desc: "Test connection" },
-  { key: "Cmd+V", desc: "Paste into field" },
-  { section: "Command Panel (Ctrl+K)" },
-  { key: "↑/↓", desc: "Navigate commands" },
-  { key: "Enter", desc: "Execute command" },
-  { key: "Type", desc: "Filter commands" },
-  { key: "Esc", desc: "Close panel" },
+  { key: "Tab", desc: "Switch panel focus" },
+  { key: "/", desc: "Search schema" },
+  { key: "Ctrl+T", desc: "New query tab" },
 ];
 
 export function HelpDialog() {
@@ -64,34 +16,44 @@ export function HelpDialog() {
   const { closeDialog } = useUIStore();
 
   useKeyboard((key) => {
-    if (key.name === "escape" || key.name === "q" || key.sequence === "?") {
+    if (key.name === "return" || key.name === "escape" || key.sequence === "?") {
       closeDialog();
+      key.stopPropagation();
     }
   });
 
   return (
-    <Dialog title="Keyboard Shortcuts" width={52} height={KEYBINDS.length + 4}>
-      <box style={{ flexDirection: "column" }}>
-        {KEYBINDS.map((item, i) => {
-          if ("section" in item && item.section) {
-            return (
-              <box key={i} style={{ paddingTop: i > 0 ? 1 : 0 }}>
-                <text fg={theme.accent}>{item.section}</text>
+    <Dialog title="Help" width={58} height={14}>
+      <box style={{ flexDirection: "column", gap: 1, flexGrow: 1 }}>
+        <text fg={theme.textMuted}>
+          Press `Ctrl+K` to see commands and actions available in the current context.
+        </text>
+
+        <box style={{ flexDirection: "column", paddingTop: 1, gap: 0 }}>
+          {COMMON_SHORTCUTS.map((item) => (
+            <box key={item.key} style={{ flexDirection: "row" }}>
+              <box style={{ width: 12 }}>
+                <text fg={theme.warning}>{item.key}</text>
               </box>
-            );
-          }
-          return (
-            <box key={i} style={{ flexDirection: "row" }}>
-              <box style={{ width: 18 }}>
-                <text fg={theme.warning}>
-                  {"  "}
-                  {(item as any).key}
-                </text>
-              </box>
-              <text fg={theme.text}>{(item as any).desc}</text>
+              <text fg={theme.text}>{item.desc}</text>
             </box>
-          );
-        })}
+          ))}
+        </box>
+
+        <box style={{ flexGrow: 1 }} />
+
+        <box style={{ flexDirection: "row", justifyContent: "space-between" }}>
+          <text fg={theme.textMuted}>Press Enter or Esc to close.</text>
+          <box
+            style={{
+              paddingX: 3,
+              backgroundColor: theme.accent,
+            }}
+            onMouseUp={() => closeDialog()}
+          >
+            <text fg={theme.bg}>ok</text>
+          </box>
+        </box>
       </box>
     </Dialog>
   );

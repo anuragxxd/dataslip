@@ -1,10 +1,8 @@
 import React from "react";
-import { useTerminalDimensions } from "@opentui/react";
 import { useTheme } from "../../theme";
 import { useConnectionsStore } from "../../store/connections";
 
 export function Header() {
-  const { width } = useTerminalDimensions();
   const theme = useTheme();
   const { connections, activeConnectionId } = useConnectionsStore();
 
@@ -29,7 +27,7 @@ export function Header() {
           <text fg={theme.textDim}>{connLabel}</text>
         )}
       </box>
-      <text fg={theme.textDim}>/ Search  Ctrl+K Commands</text>
+      <text fg={theme.textDim}>/ Search  Ctrl+K Cmds  Ctrl+T Query  Ctrl+P/N Tabs  ? Help</text>
     </box>
   );
 }

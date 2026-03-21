@@ -80,7 +80,7 @@ export function SchemaTree({ focused, height }: SchemaTreeProps) {
   }, [flatNodes.length, scrollOffset, visibleHeight]);
 
   const handleSelect = useCallback(
-    (index: number, mode: "grid" | "query-aware" | "sidebar" = "sidebar") => {
+    (index: number) => {
       const flat = flatNodes[index];
       if (!flat) return;
 
@@ -89,7 +89,7 @@ export function SchemaTree({ focused, height }: SchemaTreeProps) {
 
       const item = toSearchItem(node);
       if (item) {
-        void openItem(item, { mode });
+        void openItem(item);
       }
     },
     [flatNodes, openItem, selectNode]
@@ -233,7 +233,7 @@ export function SchemaTree({ focused, height }: SchemaTreeProps) {
                   return;
                 }
 
-                handleSelect(actualIdx, "sidebar");
+                handleSelect(actualIdx);
               }}
             >
               <text fg={theme.treeIndent}>{indent}</text>

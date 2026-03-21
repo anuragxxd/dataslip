@@ -3,6 +3,7 @@ import { useKeyboard } from "@opentui/react";
 import { useTheme } from "../../theme";
 import { useUIStore } from "../../store/ui";
 import { useTableDataStore } from "../../store/table-data";
+import { useWorkspaceStore } from "../../store/workspaces";
 import { getActiveSql } from "../../db/connection";
 import * as queryModule from "../../db/query";
 import { showToast } from "./toast";
@@ -22,7 +23,8 @@ interface EditConfirmData {
 export function EditConfirmDialog() {
   const theme = useTheme();
   const { dialogData, closeDialog } = useUIStore();
-  const { applyEdit, cancelEdit } = useTableDataStore();
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const store = useTableDataStore();
   const [isExecuting, setIsExecuting] = useState(false);
 
   const data = dialogData as EditConfirmData | null;
@@ -45,13 +47,13 @@ export function EditConfirmDialog() {
   });
 
   const handleExecute = async () => {
-    if (!data) return;
+    if (!data || !activeWorkspaceId) return;
 
     const sql = getActiveSql();
     if (!sql) {
       showToast("No active database connection", "error");
       closeDialog();
-      cancelEdit();
+      store.cancelEdit(activeWorkspaceId);
       return;
     }
 
@@ -67,7 +69,7 @@ export function EditConfirmDialog() {
           4000
         );
         closeDialog();
-        cancelEdit();
+        store.cancelEdit(activeWorkspaceId);
         return;
       }
 
@@ -80,7 +82,7 @@ export function EditConfirmDialog() {
       }
 
       // Apply the edit to the in-memory data
-      applyEdit(data.column, data.newValue, data.isNull);
+      store.applyEdit(activeWorkspaceId, data.column, data.newValue, data.isNull);
       closeDialog();
       showToast(
         `Updated ${data.column} (${result.duration}ms)`,

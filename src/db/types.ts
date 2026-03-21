@@ -86,6 +86,26 @@ export interface SchemaSearchItem {
   referencedTable?: string;
 }
 
+export type TableFilterOperator =
+  | "="
+  | "!="
+  | ">"
+  | "<"
+  | ">="
+  | "<="
+  | "contains"
+  | "starts_with"
+  | "is_null"
+  | "is_not_null";
+
+export interface TableFilterClause {
+  id: string;
+  column: string;
+  columnType: string;
+  operator: TableFilterOperator;
+  value?: string;
+}
+
 // ─── Query Results ────────────────────────────────────────────
 export interface QueryResult {
   columns: { name: string; type: string }[];

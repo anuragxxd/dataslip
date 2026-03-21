@@ -3,10 +3,12 @@ import { useKeyboard } from "@opentui/react";
 import { useTheme } from "../../theme";
 import { useTableDataStore } from "../../store/table-data";
 import { useUIStore } from "../../store/ui";
-import { formatCellValue, formatRowCount, getTypeColor } from "../../utils/format";
+import { formatCellValue, formatRowCount, getTypeColor, truncate } from "../../utils/format";
+import { formatFiltersSummary } from "../../utils/sql";
 import { KeybindBar } from "../ui/keybind-bar";
 
 interface DataGridProps {
+  workspaceId: string;
   focused: boolean;
   width: number;
   height: number;
@@ -45,9 +47,11 @@ function computeColumnWidths(
   return widths.map((w) => Math.min(Math.max(w, 4), 40));
 }
 
-export function DataGrid({ focused, width, height }: DataGridProps) {
+export function DataGrid({ workspaceId, focused, width, height }: DataGridProps) {
   const theme = useTheme();
   const { activeDialog, openDialog } = useUIStore();
+  const store = useTableDataStore();
+  const ws = store.getWorkspaceState(workspaceId);
   const {
     currentSchema,
     result,
@@ -59,23 +63,15 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
     scrollOffsetX,
     orderBy,
     orderDir,
+    quickSearch,
+    filters,
     isLoading,
     error,
     currentTable,
     currentTableType,
     primaryKeyColumns,
     edit,
-    moveSelection,
-    reloadCurrent,
-    setPage,
-    setSort,
-    setScrollOffsetX,
-    startEdit,
-    setEditValue,
-    toggleEditNull,
-    cancelEdit,
-    prepareEditConfirm,
-  } = useTableDataStore();
+  } = ws;
 
   const columns = result?.columns || [];
   const rows = result?.rows || [];
@@ -105,7 +101,21 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
     return visible;
   }, [columns, colWidths, scrollOffsetX, width]);
 
-  const gridHeight = height - 5; // header(2) + pagination(1) + border(2)
+  const gridHeight = height - 6; // summary(1) + header(2) + pagination(1) + border(2)
+
+  const viewSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (quickSearch) {
+      parts.push(`Search: \"${quickSearch}\"`);
+    }
+    if (filters.length > 0) {
+      parts.push(`Filters: ${formatFiltersSummary(filters)}`);
+    }
+    if (parts.length === 0) {
+      return "View: all rows | F search & filters | = filter cell | x clear";
+    }
+    return parts.join(" | ");
+  }, [filters, quickSearch]);
 
   useKeyboard(
     (key) => {
@@ -113,14 +123,14 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
       if (!focused) return;
 
       // ── Edit mode keybindings ──
-      if (edit.editMode) {
+      if (useTableDataStore.getState().getWorkspaceState(workspaceId).edit.editMode) {
         if (key.name === "escape") {
-          cancelEdit();
+          store.cancelEdit(workspaceId);
           key.stopPropagation();
           return;
         }
         if (key.ctrl && key.name === "n") {
-          toggleEditNull();
+          store.toggleEditNull(workspaceId);
           key.stopPropagation();
           return;
         }
@@ -130,72 +140,75 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
 
       // ── Navigate mode keybindings ──
       if (key.name === "return") {
-        if (startEdit()) {
+        if (store.startEdit(workspaceId)) {
           key.stopPropagation();
         }
         return;
       }
 
       if (key.name === "up" || key.name === "k") {
-        moveSelection(-1, 0);
+        store.moveSelection(workspaceId, -1, 0);
       } else if (key.name === "down" || key.name === "j") {
-        moveSelection(1, 0);
+        store.moveSelection(workspaceId, 1, 0);
+      } else if ((key.shift && key.name === "f") || key.sequence === "F") {
+        openDialog("table-filters", { workspaceId });
+      } else if (key.sequence === "=") {
+        void store.addFilterFromSelectedCell(workspaceId, "=");
+      } else if (key.name === "x") {
+        if (quickSearch || filters.length > 0) {
+          void store.clearSearchAndFilters(workspaceId);
+        }
       } else if (key.name === "left" || key.name === "h") {
         if (selectedCol > 0) {
-          moveSelection(0, -1);
+          store.moveSelection(workspaceId, 0, -1);
           if (selectedCol - 1 < scrollOffsetX) {
-            setScrollOffsetX(Math.max(0, selectedCol - 1));
+            store.setScrollOffsetX(workspaceId, Math.max(0, selectedCol - 1));
           }
         }
       } else if (key.name === "right" || key.name === "l") {
         if (selectedCol < columns.length - 1) {
-          moveSelection(0, 1);
+          store.moveSelection(workspaceId, 0, 1);
           const lastVisibleIdx =
             visibleColumns.length > 0
               ? visibleColumns[visibleColumns.length - 1].index
               : 0;
           if (selectedCol + 1 > lastVisibleIdx) {
-            setScrollOffsetX(
+            store.setScrollOffsetX(
+              workspaceId,
               Math.min(columns.length - 1, scrollOffsetX + 1)
             );
           }
         }
-      } else if (key.sequence === "]") {
-        // Next page
-        if (page < totalPages) void setPage(page + 1);
-      } else if (key.sequence === "[") {
-        // Previous page
-        if (page > 1) void setPage(page - 1);
       } else if (key.name === "n" || key.name === "pagedown") {
         if (page < totalPages) {
-          void setPage(page + 1);
+          void store.setPage(workspaceId, page + 1);
         }
       } else if (key.name === "p" || key.name === "pageup") {
         if (page > 1) {
-          void setPage(page - 1);
+          void store.setPage(workspaceId, page - 1);
         }
       } else if (key.name === "r") {
         if (currentSchema && currentTable) {
-          void reloadCurrent();
+          void store.reloadCurrent(workspaceId);
         }
       } else if (key.name === "s") {
         // Sort by current column
         if (columns[selectedCol]) {
-          void setSort(columns[selectedCol].name);
+          void store.setSort(workspaceId, columns[selectedCol].name);
         }
       } else if (key.name === "home" || key.name === "g") {
         // Go to first row
-        moveSelection(-selectedRow, 0);
+        store.moveSelection(workspaceId, -selectedRow, 0);
       } else if (key.name === "end" || key.name === "G") {
         // Go to last row
-        moveSelection(rows.length - 1 - selectedRow, 0);
+        store.moveSelection(workspaceId, rows.length - 1 - selectedRow, 0);
       }
     }
   );
 
   // Handle edit input submit (Enter in the <input>)
   const handleEditSubmit = () => {
-    const confirmData = prepareEditConfirm();
+    const confirmData = store.prepareEditConfirm(workspaceId);
     if (confirmData) {
       openDialog("edit-confirm", confirmData);
     }
@@ -270,6 +283,11 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
     : [
         { key: "hjkl", label: "Navigate" },
         ...(isEditable ? [{ key: "Enter", label: "Edit cell" }] : []),
+        { key: "Esc", label: "Sidebar" },
+        { key: "Ctrl+P/N", label: "Tabs" },
+        { key: "F", label: "Search/Filters" },
+        { key: "=", label: "Filter cell" },
+        { key: "x", label: "Clear" },
         { key: "n/p", label: "Page" },
         { key: "r", label: "Reload" },
         { key: "s", label: "Sort" },
@@ -294,6 +312,19 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
         backgroundColor: theme.bg,
       }}
     >
+      <box
+        style={{
+          flexDirection: "row",
+          width: "100%",
+          backgroundColor: theme.bgAlt,
+          paddingX: 1,
+        }}
+      >
+        <text fg={quickSearch || filters.length > 0 ? theme.text : theme.textDim}>
+          {truncate(viewSummary, Math.max(8, width - 4))}
+        </text>
+      </box>
+
       {/* Column headers */}
       <box
         style={{
@@ -400,7 +431,7 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
                         <input
                           value={edit.editValue}
                           focused={activeDialog === "none"}
-                          onInput={(val: string) => setEditValue(val)}
+                          onInput={(val: string) => store.setEditValue(workspaceId, val)}
                           onSubmit={() => handleEditSubmit()}
                           width={colW}
                           style={{
@@ -460,7 +491,7 @@ export function DataGrid({ focused, width, height }: DataGridProps) {
       >
         <KeybindBar bindings={keybindHints} />
         <text fg={theme.textDim}>
-          {edit.editMode ? "EDIT" : `Page ${page}/${totalPages} | n/p page | r reload`}
+          {edit.editMode ? "EDIT" : `Page ${page}/${totalPages} | F filter/search | n/p page | r reload`}
         </text>
       </box>
     </box>

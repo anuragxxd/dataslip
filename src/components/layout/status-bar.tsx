@@ -3,35 +3,19 @@ import { useTheme } from "../../theme";
 import { useTableDataStore } from "../../store/table-data";
 import { useUIStore } from "../../store/ui";
 import { useQueryStore } from "../../store/query";
+import { useWorkspaceStore } from "../../store/workspaces";
 import { formatRowCount, truncate } from "../../utils/format";
+import { formatFiltersSummary } from "../../utils/sql";
 
 export function StatusBar() {
   const theme = useTheme();
-  const {
-    currentSchema,
-    currentTable,
-    totalRows,
-    page,
-    pageSize,
-    result,
-    isLoading,
-    orderBy,
-    orderDir,
-  } = useTableDataStore();
   const { activePanel } = useUIStore();
-  const {
-    isOpen: isQueryOpen,
-    isExecuting,
-    result: queryResult,
-    error: queryError,
-    history,
-  } = useQueryStore();
+  const activeWs = useWorkspaceStore((s) => {
+    const id = s.activeWorkspaceId;
+    return id ? s.workspaces.find((w) => w.id === id) || null : null;
+  });
 
-  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
-
-  if (isQueryOpen) {
-    const latest = history[0];
-
+  if (!activeWs) {
     return (
       <box
         style={{
@@ -42,31 +26,24 @@ export function StatusBar() {
           paddingX: 1,
         }}
       >
-        <box style={{ flexDirection: "row", flexGrow: 1 }}>
-          <text fg={theme.text}>Query editor</text>
-          {isExecuting && <text fg={theme.warning}> | Running...</text>}
-          {!isExecuting && queryError && (
-            <text fg={theme.error}> | {truncate(queryError, 60)}</text>
-          )}
-          {!isExecuting && !queryError && queryResult && (
-            <text fg={theme.textDim}>
-              {" "}
-              | {queryResult.rowCount} rows | {queryResult.duration}ms
-            </text>
-          )}
-          {!isExecuting && !queryError && !queryResult && latest && (
-            <text fg={theme.textDim}>
-              {" "}
-              | Last run: {latest.rowCount} rows in {latest.duration}ms
-            </text>
-          )}
-        </box>
-        <text fg={theme.textDim}>
-          Focus: {activePanel === "sidebar" ? "Tree" : activePanel === "query-results" ? "Results" : "Query"}
-        </text>
+        <text fg={theme.textDim}>Select a table to view data | / search schema | Ctrl+T new query</text>
       </box>
     );
   }
+
+  if (activeWs.kind === "query") {
+    return <QueryStatusBar workspaceId={activeWs.id} />;
+  }
+
+  return <TableStatusBar workspaceId={activeWs.id} />;
+}
+
+function QueryStatusBar({ workspaceId }: { workspaceId: string }) {
+  const theme = useTheme();
+  const { activePanel } = useUIStore();
+  const qs = useQueryStore((s) => s.getWorkspaceState(workspaceId));
+
+  const latest = qs.history[0];
 
   return (
     <box
@@ -78,25 +55,74 @@ export function StatusBar() {
         paddingX: 1,
       }}
     >
-      {currentTable ? (
+      <box style={{ flexDirection: "row", flexGrow: 1 }}>
+        <text fg={theme.text}>Query editor</text>
+        {qs.isExecuting && <text fg={theme.warning}> | Running...</text>}
+        {!qs.isExecuting && qs.error && (
+          <text fg={theme.error}> | {truncate(qs.error, 60)}</text>
+        )}
+        {!qs.isExecuting && !qs.error && qs.result && (
+          <text fg={theme.textDim}>
+            {" "}
+            | {qs.result.rowCount} rows | {qs.result.duration}ms
+          </text>
+        )}
+        {!qs.isExecuting && !qs.error && !qs.result && latest && (
+          <text fg={theme.textDim}>
+            {" "}
+            | Last run: {latest.rowCount} rows in {latest.duration}ms
+          </text>
+        )}
+      </box>
+      <text fg={theme.textDim}>
+        Focus: {activePanel === "sidebar" ? "Tree" : activePanel === "query-results" ? "Results" : "Query"}
+      </text>
+    </box>
+  );
+}
+
+function TableStatusBar({ workspaceId }: { workspaceId: string }) {
+  const theme = useTheme();
+  const { activePanel } = useUIStore();
+  const ts = useTableDataStore((s) => s.getWorkspaceState(workspaceId));
+
+  const totalPages = Math.max(1, Math.ceil(ts.totalRows / ts.pageSize));
+
+  return (
+    <box
+      style={{
+        width: "100%",
+        height: 1,
+        flexDirection: "row",
+        backgroundColor: theme.bgAlt,
+        paddingX: 1,
+      }}
+    >
+      {ts.currentTable ? (
         <>
           <box style={{ flexDirection: "row", flexGrow: 1 }}>
             <text fg={theme.text}>
-              {currentSchema}.{currentTable}
+              {ts.currentSchema}.{ts.currentTable}
             </text>
             <text fg={theme.textDim}>
               {" "}
-              | {formatRowCount(totalRows)} rows | Page {page}/{totalPages} | {pageSize}/page | n/p page | r reload
+              | {formatRowCount(ts.totalRows)} rows | Page {ts.page}/{totalPages} | {ts.pageSize}/page | n/p page | r reload
             </text>
-            {orderBy && (
+            {ts.quickSearch && (
+              <text fg={theme.textDim}> | Search: {truncate(ts.quickSearch, 20)}</text>
+            )}
+            {ts.filters.length > 0 && (
+              <text fg={theme.textDim}> | {truncate(formatFiltersSummary(ts.filters), 36)}</text>
+            )}
+            {ts.orderBy && (
               <text fg={theme.textDim}>
                 {" "}
-                | Sort: {orderBy} {orderDir}
+                | Sort: {ts.orderBy} {ts.orderDir}
               </text>
             )}
-            {isLoading && <text fg={theme.warning}> | Loading...</text>}
-            {result && !isLoading && (
-              <text fg={theme.textDim}> | {result.duration}ms</text>
+            {ts.isLoading && <text fg={theme.warning}> | Loading...</text>}
+            {ts.result && !ts.isLoading && (
+              <text fg={theme.textDim}> | {ts.result.duration}ms</text>
             )}
           </box>
           <text fg={theme.textDim}>
@@ -104,7 +130,7 @@ export function StatusBar() {
           </text>
         </>
       ) : (
-        <text fg={theme.textDim}>Select a table to view data | / search schema</text>
+        <text fg={theme.textDim}>Loading table...</text>
       )}
     </box>
   );

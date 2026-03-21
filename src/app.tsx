@@ -1,14 +1,19 @@
-import React, { useCallback, useEffect } from "react";
+import React, { useEffect } from "react";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { useTheme } from "./theme";
 
 // Stores
 import { useUIStore } from "./store/ui";
-import { useConnectionsStore } from "./store/connections";
 import { useSchemaStore } from "./store/schema";
 import { useTableDataStore } from "./store/table-data";
-import { useQueryStore } from "./store/query";
-import { buildSelectAllQuery } from "./utils/sql";
+import { useWorkspaceStore } from "./store/workspaces";
+import { useSessionPersistence } from "./hooks/use-session-persistence";
+import {
+  closeWorkspaceWithUi,
+  openBlankQueryWorkspace,
+  openSeededQueryWorkspace,
+} from "./utils/workspace-actions";
+import { quitApp } from "./utils/session-actions";
 
 // Layout
 import { Header } from "./components/layout/header";
@@ -28,6 +33,9 @@ import { CommandPanel } from "./components/ui/command-panel";
 import { SchemaSearch } from "./components/ui/schema-search";
 import { EditConfirmDialog } from "./components/ui/edit-confirm-dialog";
 import { DialogFocusManager } from "./components/ui/dialog-focus-manager";
+import { SessionConfirmDialog } from "./components/ui/session-confirm-dialog";
+import { TableFiltersDialog } from "./components/table/table-filters-dialog";
+import { TableFilterPreviewDialog } from "./components/table/table-filter-preview-dialog";
 import { ToastContainer } from "./components/ui/toast";
 
 export function App() {
@@ -35,42 +43,60 @@ export function App() {
   const theme = useTheme();
   const {
     screen,
-    setScreen,
     activePanel,
     activeDialog,
     dialogData,
     openDialog,
     setActivePanel,
-    togglePanel,
     sidebarWidth,
-    resetNavigation,
   } = useUIStore();
-  const { disconnectCurrent } = useConnectionsStore();
-  const { reset: resetSchema } = useSchemaStore();
-  const { currentSchema, currentTable, reset: resetTableData } = useTableDataStore();
-  const { isOpen: isQueryOpen, openQuery, closeQuery, reset: resetQuery } = useQueryStore();
+  const { jumpToTable } = useSchemaStore();
+  const wsStore = useWorkspaceStore();
+  const { activeWorkspaceId, workspaces } = wsStore;
 
-  const handleDisconnect = useCallback(async () => {
-    await disconnectCurrent();
-    resetSchema();
-    resetTableData();
-    resetQuery();
-    resetNavigation();
-    setScreen("connections");
-  }, [disconnectCurrent, resetNavigation, resetQuery, resetSchema, resetTableData, setScreen]);
+  const activeWs = workspaces.find((w) => w.id === activeWorkspaceId) || null;
 
+  // Auto-persist session to SQLite
+  useSessionPersistence();
+
+  // When active workspace changes, sync the tree and focus
   useEffect(() => {
-    if (screen === "main" && !currentTable && activePanel === "grid") {
+    const workspace = useWorkspaceStore.getState().getActiveWorkspace();
+    if (!workspace) return;
+
+    if (workspace.kind === "table" && workspace.source?.schema && workspace.source?.table) {
+      void jumpToTable(workspace.source.schema, workspace.source.table);
+    }
+
+    setActivePanel(workspace.lastPanel);
+  }, [activeWorkspaceId, jumpToTable, setActivePanel]);
+
+  // Track panel changes back to workspace meta
+  useEffect(() => {
+    if (!activeWs) return;
+    if (activePanel === "sidebar") return; // Don't store sidebar as lastPanel
+    const validPanels = activeWs.kind === "query"
+      ? ["query", "query-results"]
+      : ["grid"];
+    if (validPanels.includes(activePanel) && activePanel !== activeWs.lastPanel) {
+      wsStore.updateWorkspaceMeta(activeWs.id, {
+        lastPanel: activePanel as "grid" | "query" | "query-results",
+      });
+    }
+  }, [activePanel, activeWs, wsStore]);
+
+  // When no workspaces are open and we're on main screen, focus sidebar
+  useEffect(() => {
+    if (screen === "main" && workspaces.length === 0) {
       setActivePanel("sidebar");
     }
-  }, [activePanel, currentTable, screen, setActivePanel]);
+  }, [screen, workspaces.length, setActivePanel]);
 
   // Global keybindings
   useKeyboard((key) => {
-    // Ctrl+K opens command panel from anywhere (even over other dialogs)
+    // Ctrl+K opens command panel from anywhere
     if (key.ctrl && key.name === "k") {
       if (activeDialog === "command-panel") {
-        // Toggle off if already open
         useUIStore.getState().closeDialog();
       } else {
         openDialog("command-panel");
@@ -78,77 +104,159 @@ export function App() {
       return;
     }
 
-    // Don't handle keys when a dialog is open (dialogs handle their own)
+    // Don't handle keys when a dialog is open
     if (activeDialog !== "none") return;
 
+    const isEditingCell =
+      activeWs?.kind === "table" &&
+      useTableDataStore.getState().getWorkspaceState(activeWs.id).edit.editMode;
+
+    if (isEditingCell) {
+      return;
+    }
+
+    // ── Query workspace panel switching ──
     if (
       screen === "main" &&
-      isQueryOpen &&
+      activeWs?.kind === "query" &&
       (activePanel === "query" || activePanel === "query-results")
     ) {
       if (key.name === "tab") {
-        setActivePanel(activePanel === "query" ? "query-results" : "sidebar");
+        const nextPanel = activePanel === "query" ? "query-results" : "sidebar";
+        key.preventDefault();
+        key.stopPropagation();
+        setActivePanel(nextPanel);
         return;
       }
 
       if (key.name === "escape") {
-        setActivePanel(closeQuery());
+        key.preventDefault();
+        key.stopPropagation();
+        setActivePanel("sidebar");
         return;
       }
 
       if (key.ctrl && key.name === "c") {
-        process.exit(0);
+        key.preventDefault();
+        key.stopPropagation();
+        openDialog("confirm-quit");
+        return;
       }
 
+      // Fall through for tab-switching shortcuts below
+    }
+
+    // ── Tab shortcuts (available on main screen) ──
+    if (screen === "main") {
+      if (key.ctrl && key.name === "n") {
+        key.preventDefault();
+        key.stopPropagation();
+        wsStore.nextWorkspace();
+        return;
+      }
+
+      if (key.ctrl && key.name === "p") {
+        key.preventDefault();
+        key.stopPropagation();
+        wsStore.prevWorkspace();
+        return;
+      }
+
+      if (key.ctrl && key.name === "w") {
+        key.preventDefault();
+        key.stopPropagation();
+        if (activeWs) {
+          closeWorkspaceWithUi(activeWs.id);
+        }
+        return;
+      }
+
+      if (key.ctrl && key.name === "t") {
+        key.preventDefault();
+        key.stopPropagation();
+        openBlankQueryWorkspace();
+        return;
+      }
+    }
+
+    // ── Help ──
+    if (key.sequence === "?" || (key.shift && key.name === "slash")) {
+      key.preventDefault();
+      key.stopPropagation();
+      openDialog("help");
       return;
     }
 
+    // ── Schema search ──
     if ((key.sequence === "/" || key.name === "slash") && screen === "main") {
+      key.preventDefault();
+      key.stopPropagation();
       openDialog("schema-search");
       return;
     }
 
+    // ── Tab/panel switching ──
     if (key.name === "tab" && screen === "main") {
-      if (isQueryOpen) {
-        setActivePanel(activePanel === "sidebar" ? "query" : "sidebar");
-        return;
-      }
-
-      if (!currentTable) {
+      key.preventDefault();
+      key.stopPropagation();
+      if (!activeWs) {
         setActivePanel("sidebar");
         return;
       }
-      togglePanel();
-    } else if (key.name === "q" && screen === "main") {
-      if (isQueryOpen) {
-        setActivePanel("query");
+
+      if (activeWs.kind === "query") {
+        if (activePanel === "sidebar") {
+          setActivePanel("query");
+        } else if (activePanel === "query") {
+          setActivePanel("query-results");
+        } else {
+          setActivePanel("sidebar");
+        }
+      } else {
+        setActivePanel(activePanel === "sidebar" ? "grid" : "sidebar");
+      }
+      return;
+    }
+
+    if (
+      key.name === "q" &&
+      screen === "main" &&
+      activeWs?.kind === "table" &&
+      activeWs.source?.schema &&
+      activeWs.source?.table
+    ) {
+      key.preventDefault();
+      key.stopPropagation();
+      openSeededQueryWorkspace(activeWs.source.schema, activeWs.source.table);
+      return;
+    }
+
+    if (key.name === "escape" && screen === "main") {
+      key.preventDefault();
+      key.stopPropagation();
+
+      if (activePanel !== "sidebar") {
+        setActivePanel("sidebar");
         return;
       }
 
-      const initialQuery =
-        currentSchema && currentTable
-          ? buildSelectAllQuery(currentSchema, currentTable)
-          : undefined;
-      openQuery(activePanel === "grid" ? "grid" : "sidebar", initialQuery);
-      setActivePanel("query");
-    } else if (key.name === "escape" && screen === "main") {
-      if (isQueryOpen) {
-        setActivePanel(closeQuery());
-        return;
-      }
-      // Don't disconnect if the grid is in edit mode — let the grid handle Escape
-      if (useTableDataStore.getState().edit.editMode) {
-        return;
-      }
-      handleDisconnect();
+      openDialog("confirm-disconnect");
     } else if (key.name === "q" && screen === "connections") {
-      process.exit(0);
+      key.preventDefault();
+      key.stopPropagation();
+      openDialog("confirm-quit");
     } else if (key.ctrl && key.name === "c") {
-      process.exit(0);
+      key.preventDefault();
+      key.stopPropagation();
+      if (screen === "main" || screen === "connections") {
+        openDialog("confirm-quit");
+      } else {
+        quitApp();
+      }
     }
   });
 
-  const contentHeight = height - 2; // header + status bar
+  const contentHeight = height - 2; // header(1) + status bar(1)
   const mainPanelWidth = width - sidebarWidth;
 
   return (
@@ -167,7 +275,13 @@ export function App() {
         {screen === "connections" ? (
           <ConnectionList />
         ) : (
-          <box style={{ flexDirection: "row", width: "100%", height: contentHeight }}>
+          <box
+            style={{
+              flexDirection: "row",
+              width: "100%",
+              height: contentHeight,
+            }}
+          >
             <Sidebar height={contentHeight} />
             <MainPanel width={mainPanelWidth} height={contentHeight} />
           </box>
@@ -183,9 +297,14 @@ export function App() {
       )}
       {activeDialog === "help" && <HelpDialog />}
       {activeDialog === "confirm-delete" && <ConfirmDeleteDialog />}
+      {(activeDialog === "confirm-disconnect" || activeDialog === "confirm-quit") && (
+        <SessionConfirmDialog />
+      )}
       {activeDialog === "theme-picker" && <ThemePicker />}
       {activeDialog === "command-panel" && <CommandPanel />}
       {activeDialog === "schema-search" && <SchemaSearch />}
+      {activeDialog === "table-filters" && <TableFiltersDialog />}
+      {activeDialog === "table-filter-preview" && <TableFilterPreviewDialog />}
       {activeDialog === "edit-confirm" && <EditConfirmDialog />}
 
       {/* Toast notifications */}

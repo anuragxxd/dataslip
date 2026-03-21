@@ -120,6 +120,24 @@ export function setSetting(key: string, value: string): void {
   );
 }
 
+export function getJsonSetting<T>(key: string): T | null {
+  const raw = getSetting(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function setJsonSetting(key: string, value: unknown): void {
+  setSetting(key, JSON.stringify(value));
+}
+
+export function deleteSetting(key: string): void {
+  getDb().run("DELETE FROM settings WHERE key = ?", [key]);
+}
+
 export function closeStorage(): void {
   if (db) {
     db.close();

@@ -10,11 +10,9 @@ import type {
 } from "../db/types";
 import { getActiveSql } from "../db/connection";
 import * as introspect from "../db/introspect";
-import { useQueryStore } from "./query";
+import { useWorkspaceStore } from "./workspaces";
 import { useTableDataStore } from "./table-data";
 import { useUIStore } from "./ui";
-
-type OpenItemMode = "grid" | "query-aware" | "sidebar";
 
 interface SchemaState {
   // Data
@@ -44,10 +42,7 @@ interface SchemaState {
   selectNode: (nodeId: string) => void;
   jumpToNode: (nodeId: string) => void;
   jumpToTable: (schema: string, table: string) => Promise<void>;
-  openItem: (
-    item: SchemaSearchItem,
-    options?: { mode?: OpenItemMode }
-  ) => Promise<void>;
+  openItem: (item: SchemaSearchItem) => Promise<void>;
   buildTree: () => TreeNode[];
   reset: () => void;
 }
@@ -190,15 +185,13 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const expanded = new Set(get().expandedNodes);
 
     if (parts[0] === "schema") {
-      // Just expand the schema
       expanded.add(nodeId);
     } else if (parts[0] === "table" || parts[0] === "view") {
-      const [type, schema, table] = parts;
+      const [type, schema] = parts;
       expanded.add(`schema:${schema}`);
       expanded.add(`${type === "table" ? "table-group" : "view-group"}:${schema}`);
     } else if (parts[0] === "column" || parts[0] === "index" || parts[0] === "fk") {
       const [nodeType, schema, table] = parts;
-      // Determine if parent is a table or view
       const schemaTables = get().tables[schema] || [];
       const match = schemaTables.find((t) => t.name === table);
       const isView = match?.type === "view";
@@ -220,18 +213,15 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
   },
 
   jumpToTable: async (schema, table) => {
-    // Ensure tables for this schema are loaded
     if (!get().tables[schema]) {
       await get().loadTables(schema);
     }
 
-    // Determine if it's a table or view
     const schemaTables = get().tables[schema] || [];
     const match = schemaTables.find((t) => t.name === table);
     const type = match?.type === "view" ? "view" : "table";
     const nodeId = `${type}:${schema}:${table}`;
 
-    // Ensure columns/indexes/FKs are loaded
     const key = `${schema}.${table}`;
     if (!get().columns[key]) {
       await get().loadColumns(schema, table);
@@ -240,11 +230,10 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     get().jumpToNode(nodeId);
   },
 
-  openItem: async (item, options) => {
-    const mode = options?.mode || "grid";
+  openItem: async (item) => {
     const ui = useUIStore.getState();
-    const query = useQueryStore.getState();
-    const tableData = useTableDataStore.getState();
+    const wsStore = useWorkspaceStore.getState();
+    const tableStore = useTableDataStore.getState();
 
     if (item.type === "schema") {
       get().jumpToNode(item.nodeId);
@@ -262,44 +251,31 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const relation = (get().tables[schema] || []).find((entry) => entry.name === table);
     const relationType = item.type === "view" || relation?.type === "view" ? "view" : "table";
 
-    if (mode === "sidebar") {
-      if (query.isOpen && (item.type === "table" || item.type === "view")) {
-        await get().jumpToTable(schema, table);
-        query.seedFromTable(schema, table);
-        ui.setActivePanel("sidebar");
-        return;
-      }
-
-      await Promise.all([
-        tableData.loadTable(schema, table, relationType),
-        get().jumpToTable(schema, table),
-      ]);
-
-      if (item.type === "column" || item.type === "index" || item.type === "fk") {
-        get().jumpToNode(item.nodeId);
-      }
-
-      ui.setActivePanel("sidebar");
-      return;
-    }
-
-    if (mode === "query-aware" && query.isOpen && (item.type === "table" || item.type === "view")) {
-      await get().jumpToTable(schema, table);
-      query.seedFromTable(schema, table);
-      ui.setActivePanel("query");
-      return;
-    }
-
-    if (query.isOpen) {
-      query.closeQuery();
-    }
+    const { id: workspaceId, created } = wsStore.openTableWorkspace(
+      schema,
+      table,
+      relationType
+    );
+    const workspaceState = tableStore.getWorkspaceState(workspaceId);
+    const needsHydration =
+      created ||
+      workspaceState.currentTable !== table ||
+      workspaceState.currentSchema !== schema ||
+      workspaceState.currentTableType !== relationType ||
+      workspaceState.isInvalid ||
+      (!workspaceState.result && !workspaceState.isLoading);
 
     ui.setActivePanel("grid");
 
-    await Promise.all([
-      tableData.loadTable(schema, table, relationType),
-      get().jumpToTable(schema, table),
-    ]);
+    if (needsHydration) {
+      tableStore.initWorkspace(workspaceId);
+      await Promise.all([
+        tableStore.loadTable(workspaceId, schema, table, relationType),
+        get().jumpToTable(schema, table),
+      ]);
+    } else {
+      await get().jumpToTable(schema, table);
+    }
 
     if (item.type === "column" || item.type === "index" || item.type === "fk") {
       get().jumpToNode(item.nodeId);
@@ -311,7 +287,7 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
     const nodes: TreeNode[] = [];
 
     for (const schema of state.schemas) {
-      if (schema.isSystem) continue; // Hide system schemas by default
+      if (schema.isSystem) continue;
 
       const schemaId = `schema:${schema.name}`;
       const isExpanded = state.expandedNodes.has(schemaId);
@@ -320,7 +296,6 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
       const schemaChildren: TreeNode[] = [];
 
       if (isExpanded) {
-        // Tables group
         const tables = schemaTables.filter((t) => t.type === "table");
         const views = schemaTables.filter((t) => t.type === "view");
 
@@ -341,7 +316,6 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
               const tableAllChildren: TreeNode[] = [];
 
               if (tableExpanded) {
-                // Indexes group
                 if (tableIndexes.length > 0) {
                   const idxGroupId = `index-group:${schema.name}:${table.name}`;
                   const idxGroupExpanded = state.expandedNodes.has(idxGroupId);
@@ -372,7 +346,6 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
                   });
                 }
 
-                // Foreign Keys group
                 if (tableFKs.length > 0) {
                   const fkGroupId = `fk-group:${schema.name}:${table.name}`;
                   const fkGroupExpanded = state.expandedNodes.has(fkGroupId);
@@ -401,7 +374,6 @@ export const useSchemaStore = create<SchemaState>((set, get) => ({
                   });
                 }
 
-                // Column nodes
                 for (const col of cols) {
                   tableAllChildren.push({
                     id: `column:${schema.name}:${table.name}:${col.name}`,
