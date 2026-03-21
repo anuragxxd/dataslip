@@ -1,0 +1,25 @@
+{
+  "name": "dataslip",
+  "version": "0.1.0",
+  "description": "A DataGrip-like TUI database editor for the terminal",
+  "type": "module",
+  "bin": {
+    "dataslip": "./src/index.tsx"
+  },
+  "scripts": {
+    "dev": "bun run src/index.tsx",
+    "start": "bun run src/index.tsx"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.1.90",
+    "@opentui/react": "^0.1.90",
+    "postgres": "^3.4.8",
+    "react": "^19.2.4",
+    "zod": "3.24.4",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "typescript": "^5.9.3"
+  }
+}
