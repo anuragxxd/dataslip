@@ -107,6 +107,10 @@ export function loadSession(): PersistedSession | null {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function hasPendingSessionSave(): boolean {
+  return saveTimer !== null;
+}
+
 /**
  * Schedule a session save. Debounces to avoid writing on every keystroke
  * in the query editor. Fires after 2 seconds of inactivity.
@@ -130,4 +134,10 @@ export function flushPendingSave(session?: PersistedSession): void {
   if (session) {
     saveSession(session);
   }
+}
+
+export function resetSessionSaveState(): void {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
 }

@@ -1,27 +1,25 @@
 import fs from "fs";
-import path from "path";
-import os from "os";
-
-const LOG_DIR = path.join(os.homedir(), ".dataslip");
-const LOG_FILE = path.join(LOG_DIR, "dataslip.log");
+import { ensureDataDir, getLogFilePath } from "./app-paths";
 
 let enabled = false;
 let stream: fs.WriteStream | null = null;
+let activeLogPath: string | null = null;
 
 export function enableLogging() {
-  if (enabled) return;
+  const logPath = getLogFilePath();
+  if (enabled && stream && activeLogPath === logPath) return;
+
+  closeLogger();
   enabled = true;
 
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-  }
-
-  stream = fs.createWriteStream(LOG_FILE, { flags: "a" });
+  ensureDataDir();
+  stream = fs.createWriteStream(logPath, { flags: "a" });
+  activeLogPath = logPath;
   log("info", "DataSlip started", { pid: process.pid, runtime: process.version });
 }
 
 export function getLogPath(): string {
-  return LOG_FILE;
+  return getLogFilePath();
 }
 
 function write(line: string) {
@@ -59,4 +57,6 @@ export function closeLogger() {
     stream.end();
     stream = null;
   }
+  activeLogPath = null;
+  enabled = false;
 }

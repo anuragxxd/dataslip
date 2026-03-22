@@ -1,27 +1,15 @@
 import { Database } from "bun:sqlite";
 import { ConnectionConfig } from "../db/types";
-import path from "path";
-import os from "os";
-import fs from "fs";
-
-const DATA_DIR = path.join(os.homedir(), ".dataslip");
-const DB_PATH = path.join(DATA_DIR, "dataslip.db");
+import { ensureDataDir, getDatabasePath } from "../utils/app-paths";
 
 let db: Database | null = null;
+let dbPath: string | null = null;
 
-function getDb(): Database {
-  if (db) return db;
+function createDb(databasePath: string): Database {
+  const nextDb = new Database(databasePath);
+  nextDb.run("PRAGMA journal_mode=WAL");
 
-  // Ensure data directory exists
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-
-  db = new Database(DB_PATH);
-  db.run("PRAGMA journal_mode=WAL");
-
-  // Create tables
-  db.run(`
+  nextDb.run(`
     CREATE TABLE IF NOT EXISTS connections (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -37,15 +25,33 @@ function getDb(): Database {
     )
   `);
 
-  // Settings table for persisting user preferences (theme, etc.)
-  db.run(`
+  nextDb.run(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )
   `);
 
+  return nextDb;
+}
+
+function getDb(): Database {
+  const nextDbPath = getDatabasePath();
+  if (db && dbPath === nextDbPath) return db;
+
+  if (db) {
+    db.close();
+  }
+
+  ensureDataDir();
+  db = createDb(nextDbPath);
+  dbPath = nextDbPath;
+
   return db;
+}
+
+export function getStoragePath(): string {
+  return getDatabasePath();
 }
 
 function rowToConfig(row: any): ConnectionConfig {
@@ -143,4 +149,5 @@ export function closeStorage(): void {
     db.close();
     db = null;
   }
+  dbPath = null;
 }

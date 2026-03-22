@@ -3,29 +3,40 @@ import type { ConnectionConfig } from "../db/types";
 import * as storage from "../storage/index";
 import * as connManager from "../db/connection";
 import { generateId } from "../utils/format";
-import { logInfo, logError } from "../utils/logger";
-import { getLogPath } from "../utils/logger";
+import { getLogPath, logError, logInfo } from "../utils/logger";
+
+export interface ConnectionsStoreDependencies {
+  storage: Pick<typeof storage, "getAllConnections" | "saveConnection" | "deleteConnection">;
+  connectionManager: Pick<typeof connManager, "connect" | "disconnect" | "testConnection">;
+  generateId: typeof generateId;
+  now: () => number;
+  logInfo: typeof logInfo;
+  logError: typeof logError;
+  getLogPath: typeof getLogPath;
+}
+
+const defaultDependencies: ConnectionsStoreDependencies = {
+  storage,
+  connectionManager: connManager,
+  generateId,
+  now: () => Date.now(),
+  logInfo,
+  logError,
+  getLogPath,
+};
 
 interface ConnectionsState {
-  // Data
   connections: ConnectionConfig[];
   activeConnectionId: string | null;
-
-  // Status
   isConnecting: boolean;
   connectError: string | null;
   testResult: { ok: boolean; error?: string; latency?: number } | null;
   isTesting: boolean;
-
-  // Actions
   loadConnections: () => void;
   addConnection: (
     config: Omit<ConnectionConfig, "id" | "createdAt" | "updatedAt">
   ) => ConnectionConfig;
-  updateConnection: (
-    id: string,
-    updates: Partial<ConnectionConfig>
-  ) => void;
+  updateConnection: (id: string, updates: Partial<ConnectionConfig>) => void;
   removeConnection: (id: string) => void;
   connectTo: (id: string) => Promise<boolean>;
   disconnectCurrent: () => Promise<void>;
@@ -33,94 +44,119 @@ interface ConnectionsState {
     config: Omit<ConnectionConfig, "id" | "createdAt" | "updatedAt">
   ) => Promise<void>;
   clearTestResult: () => void;
+  reset: () => void;
 }
 
-export const useConnectionsStore = create<ConnectionsState>((set, get) => ({
-  connections: [],
-  activeConnectionId: null,
-  isConnecting: false,
-  connectError: null,
-  testResult: null,
-  isTesting: false,
+function createDefaultConnectionsState() {
+  return {
+    connections: [],
+    activeConnectionId: null,
+    isConnecting: false,
+    connectError: null,
+    testResult: null,
+    isTesting: false,
+  };
+}
 
-  loadConnections: () => {
-    const connections = storage.getAllConnections();
-    set({ connections });
-  },
+export function createConnectionsStore(
+  dependencies: ConnectionsStoreDependencies = defaultDependencies
+) {
+  return create<ConnectionsState>((set, get) => ({
+    ...createDefaultConnectionsState(),
 
-  addConnection: (config) => {
-    const now = Date.now();
-    const newConn: ConnectionConfig = {
-      ...config,
-      id: generateId(),
-      createdAt: now,
-      updatedAt: now,
-    };
-    storage.saveConnection(newConn);
-    set((state) => ({
-      connections: [newConn, ...state.connections],
-    }));
-    return newConn;
-  },
+    loadConnections: () => {
+      const connections = dependencies.storage.getAllConnections();
+      set({ connections });
+    },
 
-  updateConnection: (id, updates) => {
-    const existing = get().connections.find((c) => c.id === id);
-    if (!existing) return;
-    const updated = { ...existing, ...updates, updatedAt: Date.now() };
-    storage.saveConnection(updated);
-    set((state) => ({
-      connections: state.connections.map((c) => (c.id === id ? updated : c)),
-    }));
-  },
+    addConnection: (config) => {
+      const now = dependencies.now();
+      const newConn: ConnectionConfig = {
+        ...config,
+        id: dependencies.generateId(),
+        createdAt: now,
+        updatedAt: now,
+      };
+      dependencies.storage.saveConnection(newConn);
+      set((state) => ({
+        connections: [newConn, ...state.connections],
+      }));
+      return newConn;
+    },
 
-  removeConnection: (id) => {
-    storage.deleteConnection(id);
-    set((state) => ({
-      connections: state.connections.filter((c) => c.id !== id),
-    }));
-  },
+    updateConnection: (id, updates) => {
+      const existing = get().connections.find((connection) => connection.id === id);
+      if (!existing) return;
+      const updated = { ...existing, ...updates, updatedAt: dependencies.now() };
+      dependencies.storage.saveConnection(updated);
+      set((state) => ({
+        connections: state.connections.map((connection) =>
+          connection.id === id ? updated : connection
+        ),
+      }));
+    },
 
-  connectTo: async (id) => {
-    const config = get().connections.find((c) => c.id === id);
-    if (!config) return false;
+    removeConnection: (id) => {
+      dependencies.storage.deleteConnection(id);
+      set((state) => ({
+        connections: state.connections.filter((connection) => connection.id !== id),
+      }));
+    },
 
-    logInfo("connectTo called", { id, name: config.name, host: config.host, port: config.port });
-    set({ isConnecting: true, connectError: null });
-    try {
-      await connManager.connect(config);
-      set({ activeConnectionId: id, isConnecting: false });
-      return true;
-    } catch (err: any) {
-      const msg = err.message || String(err);
-      logError("connectTo failed", { error: msg });
-      set({
-        isConnecting: false,
-        connectError: `${msg} (see ${getLogPath()})`,
+    connectTo: async (id) => {
+      const config = get().connections.find((connection) => connection.id === id);
+      if (!config) return false;
+
+      dependencies.logInfo("connectTo called", {
+        id,
+        name: config.name,
+        host: config.host,
+        port: config.port,
       });
-      return false;
-    }
-  },
+      set({ isConnecting: true, connectError: null });
+      try {
+        await dependencies.connectionManager.connect(config);
+        set({ activeConnectionId: id, isConnecting: false });
+        return true;
+      } catch (err: any) {
+        const msg = err.message || String(err);
+        dependencies.logError("connectTo failed", { error: msg });
+        set({
+          isConnecting: false,
+          connectError: `${msg} (see ${dependencies.getLogPath()})`,
+        });
+        return false;
+      }
+    },
 
-  disconnectCurrent: async () => {
-    await connManager.disconnect();
-    set({ activeConnectionId: null, connectError: null });
-  },
+    disconnectCurrent: async () => {
+      await dependencies.connectionManager.disconnect();
+      set({ activeConnectionId: null, connectError: null });
+    },
 
-  testConnectionConfig: async (config) => {
-    logInfo("testConnectionConfig called", { host: config.host, port: config.port });
-    set({ isTesting: true, testResult: null });
-    const fullConfig: ConnectionConfig = {
-      ...config,
-      id: "test",
-      createdAt: 0,
-      updatedAt: 0,
-    };
-    const result = await connManager.testConnection(fullConfig);
-    if (!result.ok) {
-      result.error = `${result.error} (see ${getLogPath()})`;
-    }
-    set({ isTesting: false, testResult: result });
-  },
+    testConnectionConfig: async (config) => {
+      dependencies.logInfo("testConnectionConfig called", {
+        host: config.host,
+        port: config.port,
+      });
+      set({ isTesting: true, testResult: null });
+      const fullConfig: ConnectionConfig = {
+        ...config,
+        id: "test",
+        createdAt: 0,
+        updatedAt: 0,
+      };
+      const result = await dependencies.connectionManager.testConnection(fullConfig);
+      if (!result.ok) {
+        result.error = `${result.error} (see ${dependencies.getLogPath()})`;
+      }
+      set({ isTesting: false, testResult: result });
+    },
 
-  clearTestResult: () => set({ testResult: null }),
-}));
+    clearTestResult: () => set({ testResult: null }),
+
+    reset: () => set(createDefaultConnectionsState()),
+  }));
+}
+
+export const useConnectionsStore = createConnectionsStore();

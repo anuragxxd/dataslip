@@ -139,3 +139,7 @@ export function getActiveConfig(): ConnectionConfig | null {
 export function isConnected(): boolean {
   return activeSql !== null;
 }
+
+export async function resetConnectionState(): Promise<void> {
+  await disconnect();
+}

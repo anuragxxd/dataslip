@@ -1,41 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { useTerminalDimensions } from "@opentui/react";
 import { useTheme } from "../../theme";
+import { getToasts, showToast, subscribeToasts, type Toast } from "./toast-state";
 
-interface Toast {
-  id: number;
-  message: string;
-  type: "info" | "success" | "error" | "warning";
-  expiresAt: number;
-}
-
-let toasts: Toast[] = [];
-let nextId = 0;
-let listeners: Array<() => void> = [];
-
-function notifyListeners() {
-  listeners.forEach((l) => l());
-}
-
-export function showToast(
-  message: string,
-  type: Toast["type"] = "info",
-  durationMs: number = 3000
-) {
-  const toast: Toast = {
-    id: nextId++,
-    message,
-    type,
-    expiresAt: Date.now() + durationMs,
-  };
-  toasts = [...toasts, toast];
-  notifyListeners();
-
-  setTimeout(() => {
-    toasts = toasts.filter((t) => t.id !== toast.id);
-    notifyListeners();
-  }, durationMs);
-}
+export { resetToastState, showToast } from "./toast-state";
 
 export function ToastContainer() {
   const [, forceUpdate] = useState(0);
@@ -43,12 +11,10 @@ export function ToastContainer() {
   const theme = useTheme();
 
   useEffect(() => {
-    const listener = () => forceUpdate((n) => n + 1);
-    listeners.push(listener);
-    return () => {
-      listeners = listeners.filter((l) => l !== listener);
-    };
+    return subscribeToasts(() => forceUpdate((n) => n + 1));
   }, []);
+
+  const toasts = getToasts();
 
   if (toasts.length === 0) return null;
 

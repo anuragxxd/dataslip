@@ -4,6 +4,20 @@ import { executeRawQuery } from "../db/query";
 import type { QueryResult } from "../db/types";
 import { buildSelectAllQuery } from "../utils/sql";
 
+export interface QueryStoreDependencies {
+  getActiveSql: typeof getActiveSql;
+  executeRawQuery: typeof executeRawQuery;
+  buildSelectAllQuery: typeof buildSelectAllQuery;
+  now: () => number;
+}
+
+const defaultDependencies: QueryStoreDependencies = {
+  getActiveSql,
+  executeRawQuery,
+  buildSelectAllQuery,
+  now: () => Date.now(),
+};
+
 // ─── Per-workspace query state ────────────────────────────────
 
 interface QueryHistoryEntry {
@@ -49,153 +63,162 @@ interface QueryStoreState {
   reset: () => void;
 }
 
-export const useQueryStore = create<QueryStoreState>((set, get) => ({
-  byWorkspaceId: {},
+export function createQueryStore(
+  dependencies: QueryStoreDependencies = defaultDependencies
+) {
+  return create<QueryStoreState>((set, get) => ({
+    byWorkspaceId: {},
 
-  initWorkspace: (workspaceId, initialQuery) => {
-    const existing = get().byWorkspaceId[workspaceId];
-    if (existing) return; // Already initialized
-    const text = initialQuery || "";
-    set((state) => ({
-      byWorkspaceId: {
-        ...state.byWorkspaceId,
-        [workspaceId]: {
-          ...createDefaultQueryState(),
-          queryText: text,
-          initialQueryText: text,
-        },
-      },
-    }));
-  },
-
-  removeWorkspace: (workspaceId) => {
-    set((state) => {
-      const { [workspaceId]: _, ...rest } = state.byWorkspaceId;
-      return { byWorkspaceId: rest };
-    });
-  },
-
-  getWorkspaceState: (workspaceId) => {
-    return get().byWorkspaceId[workspaceId] || createDefaultQueryState();
-  },
-
-  setQueryText: (workspaceId, queryText) => {
-    set((state) => {
-      const ws = state.byWorkspaceId[workspaceId] || createDefaultQueryState();
-      return {
-        byWorkspaceId: {
-          ...state.byWorkspaceId,
-          [workspaceId]: { ...ws, queryText },
-        },
-      };
-    });
-  },
-
-  seedFromTable: (workspaceId, schema, table) => {
-    set((state) => {
-      const ws = state.byWorkspaceId[workspaceId] || createDefaultQueryState();
-      return {
+    initWorkspace: (workspaceId, initialQuery) => {
+      const existing = get().byWorkspaceId[workspaceId];
+      if (existing) return;
+      const text = initialQuery || "";
+      set((state) => ({
         byWorkspaceId: {
           ...state.byWorkspaceId,
           [workspaceId]: {
-            ...ws,
-            queryText: buildSelectAllQuery(schema, table),
-            result: null,
-            error: null,
+            ...createDefaultQueryState(),
+            queryText: text,
+            initialQueryText: text,
           },
         },
-      };
-    });
-  },
-
-  executeQuery: async (workspaceId) => {
-    const sql = getActiveSql();
-    const ws = get().byWorkspaceId[workspaceId];
-    if (!ws) return false;
-
-    const queryText = ws.queryText.trim();
-
-    if (!sql) {
-      set((state) => ({
-        byWorkspaceId: {
-          ...state.byWorkspaceId,
-          [workspaceId]: { ...ws, error: "No active database connection" },
-        },
       }));
-      return false;
-    }
+    },
 
-    if (!queryText) {
-      set((state) => ({
-        byWorkspaceId: {
-          ...state.byWorkspaceId,
-          [workspaceId]: { ...ws, error: "Enter a SQL query to run" },
-        },
-      }));
-      return false;
-    }
-
-    // Mark executing
-    set((state) => ({
-      byWorkspaceId: {
-        ...state.byWorkspaceId,
-        [workspaceId]: { ...state.byWorkspaceId[workspaceId]!, isExecuting: true, error: null },
-      },
-    }));
-
-    try {
-      const result = await executeRawQuery(sql, queryText);
+    removeWorkspace: (workspaceId) => {
       set((state) => {
-        const current = state.byWorkspaceId[workspaceId]!;
+        const { [workspaceId]: _, ...rest } = state.byWorkspaceId;
+        return { byWorkspaceId: rest };
+      });
+    },
+
+    getWorkspaceState: (workspaceId) => {
+      return get().byWorkspaceId[workspaceId] || createDefaultQueryState();
+    },
+
+    setQueryText: (workspaceId, queryText) => {
+      set((state) => {
+        const ws = state.byWorkspaceId[workspaceId] || createDefaultQueryState();
+        return {
+          byWorkspaceId: {
+            ...state.byWorkspaceId,
+            [workspaceId]: { ...ws, queryText },
+          },
+        };
+      });
+    },
+
+    seedFromTable: (workspaceId, schema, table) => {
+      set((state) => {
+        const ws = state.byWorkspaceId[workspaceId] || createDefaultQueryState();
         return {
           byWorkspaceId: {
             ...state.byWorkspaceId,
             [workspaceId]: {
-              ...current,
-              result,
-              isExecuting: false,
+              ...ws,
+              queryText: dependencies.buildSelectAllQuery(schema, table),
+              result: null,
               error: null,
-              history: [
-                {
-                  sql: queryText,
-                  timestamp: Date.now(),
-                  duration: result.duration,
-                  rowCount: result.rowCount,
-                },
-                ...current.history,
-              ].slice(0, 50),
             },
           },
         };
       });
-      return true;
-    } catch (err: any) {
+    },
+
+    executeQuery: async (workspaceId) => {
+      const sql = dependencies.getActiveSql();
+      const ws = get().byWorkspaceId[workspaceId];
+      if (!ws) return false;
+
+      const queryText = ws.queryText.trim();
+
+      if (!sql) {
+        set((state) => ({
+          byWorkspaceId: {
+            ...state.byWorkspaceId,
+            [workspaceId]: { ...ws, error: "No active database connection" },
+          },
+        }));
+        return false;
+      }
+
+      if (!queryText) {
+        set((state) => ({
+          byWorkspaceId: {
+            ...state.byWorkspaceId,
+            [workspaceId]: { ...ws, error: "Enter a SQL query to run" },
+          },
+        }));
+        return false;
+      }
+
       set((state) => ({
         byWorkspaceId: {
           ...state.byWorkspaceId,
           [workspaceId]: {
             ...state.byWorkspaceId[workspaceId]!,
-            isExecuting: false,
-            error: err?.message || String(err),
+            isExecuting: true,
+            error: null,
           },
         },
       }));
-      return false;
-    }
-  },
 
-  clearResult: (workspaceId) => {
-    set((state) => {
-      const ws = state.byWorkspaceId[workspaceId];
-      if (!ws) return state;
-      return {
-        byWorkspaceId: {
-          ...state.byWorkspaceId,
-          [workspaceId]: { ...ws, result: null, error: null },
-        },
-      };
-    });
-  },
+      try {
+        const result = await dependencies.executeRawQuery(sql, queryText);
+        set((state) => {
+          const current = state.byWorkspaceId[workspaceId]!;
+          return {
+            byWorkspaceId: {
+              ...state.byWorkspaceId,
+              [workspaceId]: {
+                ...current,
+                result,
+                isExecuting: false,
+                error: null,
+                history: [
+                  {
+                    sql: queryText,
+                    timestamp: dependencies.now(),
+                    duration: result.duration,
+                    rowCount: result.rowCount,
+                  },
+                  ...current.history,
+                ].slice(0, 50),
+              },
+            },
+          };
+        });
+        return true;
+      } catch (err: any) {
+        set((state) => ({
+          byWorkspaceId: {
+            ...state.byWorkspaceId,
+            [workspaceId]: {
+              ...state.byWorkspaceId[workspaceId]!,
+              isExecuting: false,
+              error: err?.message || String(err),
+            },
+          },
+        }));
+        return false;
+      }
+    },
 
-  reset: () => set({ byWorkspaceId: {} }),
-}));
+    clearResult: (workspaceId) => {
+      set((state) => {
+        const ws = state.byWorkspaceId[workspaceId];
+        if (!ws) return state;
+        return {
+          byWorkspaceId: {
+            ...state.byWorkspaceId,
+            [workspaceId]: { ...ws, result: null, error: null },
+          },
+        };
+      });
+    },
+
+    reset: () => set({ byWorkspaceId: {} }),
+  }));
+}
+
+export const useQueryStore = createQueryStore();

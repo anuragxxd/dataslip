@@ -46,16 +46,23 @@ interface UIState {
   setConnectionListIndex: (index: number) => void;
   setThemeId: (themeId: string) => void;
   resetNavigation: () => void;
+  reset: () => void;
+}
+
+function createDefaultUIState() {
+  return {
+    screen: "connections" as Screen,
+    activePanel: "sidebar" as Panel,
+    activeDialog: "none" as Dialog,
+    dialogData: null,
+    sidebarWidth: 30,
+    connectionListIndex: 0,
+    themeId: DEFAULT_THEME_ID,
+  };
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
-  screen: "connections",
-  activePanel: "sidebar",
-  activeDialog: "none",
-  dialogData: null,
-  sidebarWidth: 30,
-  connectionListIndex: 0,
-  themeId: DEFAULT_THEME_ID,
+  ...createDefaultUIState(),
 
   setScreen: (screen) => set({ screen }),
   setActivePanel: (panel) => set({ activePanel: panel }),
@@ -75,4 +82,5 @@ export const useUIStore = create<UIState>((set, get) => ({
       activeDialog: "none",
       dialogData: null,
     }),
+  reset: () => set(createDefaultUIState()),
 }));
