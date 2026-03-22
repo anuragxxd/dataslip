@@ -60,28 +60,14 @@ Then:
 
 The install script downloads the latest GitHub release for your platform and places the binary in your local bin directory.
 
-For a public repo:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/anuragxxd/dataslip/master/install.sh | sh
-```
-
-If the repo is still private, use an authenticated GitHub API request instead:
-
-```bash
-export DATASLIP_GITHUB_TOKEN="$(gh auth token)"
-curl -fsSL \
-  -H "Authorization: Bearer $DATASLIP_GITHUB_TOKEN" \
-  -H "Accept: application/vnd.github.raw" \
-  "https://api.github.com/repos/anuragxxd/dataslip/contents/install.sh?ref=master" | \
-  env DATASLIP_GITHUB_TOKEN="$DATASLIP_GITHUB_TOKEN" sh
 ```
 
 The script supports these environment variables:
 
 | Variable | Description |
 | --- | --- |
-| `DATASLIP_GITHUB_TOKEN` | GitHub token for downloading from a private repo |
 | `DATASLIP_VERSION` | Install a specific version, for example `DATASLIP_VERSION=v0.1.0` |
 | `DATASLIP_INSTALL_DIR` | Override the install directory |
 | `DATASLIP_REPO` | Override the GitHub repo, useful for testing a fork |
