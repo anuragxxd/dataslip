@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "bun run src/index.tsx",
     "start": "bun run src/index.tsx",
+    "build:release": "bun run ./scripts/build-release.ts",
     "typecheck": "bunx tsc --noEmit",
     "test": "bash -lc 'bun test --preload ./test/preload.ts $(find ./test -name \"*.test.ts\" | sort)'",
     "test:watch": "bash -lc 'bun test --watch --preload ./test/preload.ts $(find ./test -name \"*.test.ts\" | sort)'",

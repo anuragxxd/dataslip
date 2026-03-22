@@ -1,0 +1,117 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.45
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check tag matches package version
+        run: |
+          bun --eval 'const pkg = await Bun.file("package.json").json(); const expected = `v${pkg.version}`; const actual = process.env.GITHUB_REF_NAME; if (actual !== expected) { console.error(`Tag ${actual} does not match package.json version ${expected}`); process.exit(1); }'
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Run tests
+        run: bun run test
+
+  build:
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: bun-linux-x64
+            asset_name: dataslip-linux-x64
+            archive_name: dataslip-linux-x64.tar.gz
+          - runner: windows-latest
+            target: bun-windows-x64
+            asset_name: dataslip-windows-x64
+            archive_name: dataslip-windows-x64.zip
+          - runner: macos-13
+            target: bun-darwin-x64
+            asset_name: dataslip-darwin-x64
+            archive_name: dataslip-darwin-x64.tar.gz
+          - runner: macos-14
+            target: bun-darwin-arm64
+            asset_name: dataslip-darwin-arm64
+            archive_name: dataslip-darwin-arm64.tar.gz
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.45
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build release binary
+        run: bun run build:release -- --target ${{ matrix.target }}
+
+      - name: Create archive (Unix)
+        if: runner.os != 'Windows'
+        run: tar -C dist/release/${{ matrix.asset_name }} -czf dist/release/${{ matrix.archive_name }} .
+
+      - name: Create archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "dist/release/${{ matrix.asset_name }}/*" -DestinationPath "dist/release/${{ matrix.archive_name }}"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.asset_name }}
+          path: dist/release/${{ matrix.archive_name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist/release
+
+      - name: Generate checksums
+        run: |
+          cd dist/release
+          sha256sum * > SHA256SUMS
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true

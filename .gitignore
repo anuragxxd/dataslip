@@ -3,3 +3,4 @@ bun.lock
 *.db
 .DS_Store
 coverage/
+dist/
