@@ -80,6 +80,40 @@ describe("connections store", () => {
     expect(store.getState().connections).toEqual([createBaseConfig()]);
   });
 
+  test("ignores updates and connects for missing connections", async () => {
+    const saved: ConnectionConfig[] = [];
+    const store = createConnectionsStore({
+      storage: {
+        getAllConnections: () => [],
+        saveConnection: (connection) => {
+          saved.push(connection);
+        },
+        deleteConnection: () => {},
+      },
+      connectionManager: {
+        connect: async () => ({}) as any,
+        disconnect: async () => undefined,
+        testConnection: async () => ({ ok: true }),
+      },
+      generateId: () => "generated-id",
+      now: () => 42,
+      logInfo: () => {},
+      logError: () => {},
+      getLogPath: () => "/tmp/dataslip.log",
+    });
+
+    store.getState().updateConnection("missing", { host: "changed" });
+    const connected = await store.getState().connectTo("missing");
+
+    expect(saved).toEqual([]);
+    expect(connected).toBe(false);
+    expect(store.getState()).toMatchObject({
+      activeConnectionId: null,
+      isConnecting: false,
+      connectError: null,
+    });
+  });
+
   test("connects successfully and tracks the active connection", async () => {
     const connected: string[] = [];
     const infos: string[] = [];
@@ -163,6 +197,39 @@ describe("connections store", () => {
     });
     expect(store.getState().isTesting).toBe(false);
     expect(errors).toEqual(["connectTo failed"]);
+  });
+
+  test("stores successful connection test results without mutating the error", async () => {
+    const store = createConnectionsStore({
+      storage: {
+        getAllConnections: () => [],
+        saveConnection: () => {},
+        deleteConnection: () => {},
+      },
+      connectionManager: {
+        connect: async () => ({}) as any,
+        disconnect: async () => undefined,
+        testConnection: async () => ({ ok: true, latency: 18 }),
+      },
+      generateId: () => "generated-id",
+      now: () => 42,
+      logInfo: () => {},
+      logError: () => {},
+      getLogPath: () => "/tmp/dataslip.log",
+    });
+
+    await store.getState().testConnectionConfig({
+      name: "Local DB",
+      host: "localhost",
+      port: 5432,
+      database: "dataslip",
+      username: "postgres",
+      password: "secret",
+      ssl: "disable",
+    });
+
+    expect(store.getState().testResult).toEqual({ ok: true, latency: 18 });
+    expect(store.getState().isTesting).toBe(false);
   });
 
   test("disconnects, clears test results, and resets state", async () => {

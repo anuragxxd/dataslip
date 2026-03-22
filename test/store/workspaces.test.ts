@@ -16,6 +16,20 @@ describe("workspace store", () => {
     expect(store.getState().activeWorkspaceId).toBe(third.id);
   });
 
+  test("formats non-public table titles and subtitles", () => {
+    const store = createWorkspaceStore();
+
+    const opened = store.getState().openTableWorkspace("analytics", "daily_rollup", "view");
+    const workspace = store.getState().workspaces.find((item) => item.id === opened.id);
+
+    expect(workspace).toMatchObject({
+      title: "analytics.daily_rollup",
+      subtitle: "analytics",
+      source: { schema: "analytics", table: "daily_rollup", relationType: "view" },
+      lastPanel: "grid",
+    });
+  });
+
   test("numbers query workspaces and wraps next and previous navigation", () => {
     const store = createWorkspaceStore();
 
@@ -33,6 +47,19 @@ describe("workspace store", () => {
 
     store.getState().nextWorkspace();
     expect(store.getState().activeWorkspaceId).toBe(first);
+  });
+
+  test("next and previous navigation are no-ops for zero or one workspace", () => {
+    const store = createWorkspaceStore();
+
+    store.getState().nextWorkspace();
+    store.getState().prevWorkspace();
+    expect(store.getState().activeWorkspaceId).toBeNull();
+
+    const only = store.getState().openQueryWorkspace("Only");
+    store.getState().nextWorkspace();
+    store.getState().prevWorkspace();
+    expect(store.getState().activeWorkspaceId).toBe(only);
   });
 
   test("closes the active workspace by selecting the nearest remaining neighbor", () => {
@@ -53,6 +80,39 @@ describe("workspace store", () => {
 
     store.getState().closeWorkspace(third);
     expect(store.getState().activeWorkspaceId).toBe(first);
+  });
+
+  test("closing a non-active or unknown workspace preserves the active tab", () => {
+    const store = createWorkspaceStore();
+
+    const first = store.getState().openQueryWorkspace("First");
+    const second = store.getState().openQueryWorkspace("Second");
+    const third = store.getState().openQueryWorkspace("Third");
+
+    store.getState().activateWorkspace(second);
+    store.getState().closeWorkspace(first);
+    store.getState().closeWorkspace("missing");
+
+    expect(store.getState().workspaces.map((workspace) => workspace.id)).toEqual([second, third]);
+    expect(store.getState().activeWorkspaceId).toBe(second);
+  });
+
+  test("updates workspace metadata and reports the active workspace", () => {
+    const store = createWorkspaceStore();
+
+    const workspaceId = store.getState().openQueryWorkspace("Query 1");
+    store.getState().updateWorkspaceMeta(workspaceId, {
+      title: "Renamed Query",
+      dirty: true,
+      lastPanel: "query-results",
+    });
+
+    expect(store.getState().getActiveWorkspace()).toMatchObject({
+      id: workspaceId,
+      title: "Renamed Query",
+      dirty: true,
+      lastPanel: "query-results",
+    });
   });
 
   test("restores workspaces from session metadata and clears dirty flags", () => {
@@ -94,5 +154,17 @@ describe("workspace store", () => {
       table: "users",
       relationType: "table",
     });
+  });
+
+  test("reset clears all workspaces and active selection", () => {
+    const store = createWorkspaceStore();
+
+    store.getState().openQueryWorkspace("Query 1");
+    store.getState().openTableWorkspace("public", "users", "table");
+    store.getState().reset();
+
+    expect(store.getState().workspaces).toEqual([]);
+    expect(store.getState().activeWorkspaceId).toBeNull();
+    expect(store.getState().getActiveWorkspace()).toBeNull();
   });
 });

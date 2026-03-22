@@ -61,26 +61,30 @@ function createDefaultUIState() {
   };
 }
 
-export const useUIStore = create<UIState>((set, get) => ({
-  ...createDefaultUIState(),
+export function createUIStore() {
+  return create<UIState>((set) => ({
+    ...createDefaultUIState(),
 
-  setScreen: (screen) => set({ screen }),
-  setActivePanel: (panel) => set({ activePanel: panel }),
-  togglePanel: () =>
-    set((state) => ({
-      activePanel: state.activePanel === "sidebar" ? "grid" : "sidebar",
-    })),
-  openDialog: (dialog, data = null) =>
-    set({ activeDialog: dialog, dialogData: data }),
-  closeDialog: () => set({ activeDialog: "none", dialogData: null }),
-  setSidebarWidth: (width) => set({ sidebarWidth: width }),
-  setConnectionListIndex: (index) => set({ connectionListIndex: index }),
-  setThemeId: (themeId) => set({ themeId }),
-  resetNavigation: () =>
-    set({
-      activePanel: "sidebar",
-      activeDialog: "none",
-      dialogData: null,
-    }),
-  reset: () => set(createDefaultUIState()),
-}));
+    setScreen: (screen) => set({ screen }),
+    setActivePanel: (panel) => set({ activePanel: panel }),
+    togglePanel: () =>
+      set((state) => ({
+        activePanel: state.activePanel === "sidebar" ? "grid" : "sidebar",
+      })),
+    openDialog: (dialog, data = null) =>
+      set({ activeDialog: dialog, dialogData: data }),
+    closeDialog: () => set({ activeDialog: "none", dialogData: null }),
+    setSidebarWidth: (width) => set({ sidebarWidth: width }),
+    setConnectionListIndex: (index) => set({ connectionListIndex: index }),
+    setThemeId: (themeId) => set({ themeId }),
+    resetNavigation: () =>
+      set({
+        activePanel: "sidebar",
+        activeDialog: "none",
+        dialogData: null,
+      }),
+    reset: () => set(createDefaultUIState()),
+  }));
+}
+
+export const useUIStore = createUIStore();

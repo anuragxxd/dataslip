@@ -10,9 +10,9 @@
     "dev": "bun run src/index.tsx",
     "start": "bun run src/index.tsx",
     "typecheck": "bunx tsc --noEmit",
-    "test": "bun test --preload ./test/preload.ts ./test/**/*.test.ts",
-    "test:watch": "bun test --watch --preload ./test/preload.ts ./test/**/*.test.ts",
-    "test:coverage": "bash -lc 'mkdir -p coverage && set -o pipefail && bun test --coverage --preload ./test/preload.ts ./test/**/*.test.ts 2>&1 | tee coverage/summary.txt'",
+    "test": "bash -lc 'bun test --preload ./test/preload.ts $(find ./test -name \"*.test.ts\" | sort)'",
+    "test:watch": "bash -lc 'bun test --watch --preload ./test/preload.ts $(find ./test -name \"*.test.ts\" | sort)'",
+    "test:coverage": "bash -lc 'mkdir -p coverage && set -o pipefail && bun test --coverage --preload ./test/preload.ts $(find ./test -name \"*.test.ts\" | sort) 2>&1 | tee coverage/summary.txt'",
     "coverage:check": "bun run ./scripts/check-coverage.ts coverage/summary.txt 75 70"
   },
   "dependencies": {
@@ -24,6 +24,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.11",
     "@types/react": "^19.2.14",
     "typescript": "^5.9.3"
   }
