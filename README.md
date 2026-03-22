@@ -21,7 +21,7 @@ A DataGrip-like TUI database editor for the terminal. Built with [OpenTUI](https
 
 ## Requirements
 
-- [Bun](https://bun.sh) >= 1.1
+- [Bun](https://bun.sh) >= 1.3
 - A terminal with TrueColor support (iTerm2, Kitty, WezTerm, Ghostty, etc.)
 
 ## Install & Run

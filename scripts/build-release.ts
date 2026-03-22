@@ -14,6 +14,39 @@ const SUPPORTED_TARGETS = [
 
 type BuildTarget = (typeof SUPPORTED_TARGETS)[number];
 
+const MIN_RELEASE_BUN_VERSION = "1.3.10";
+
+function parseVersion(version: string): number[] {
+  return version
+    .split("-")[0]
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+}
+
+function isVersionAtLeast(current: string, minimum: string): boolean {
+  const currentParts = parseVersion(current);
+  const minimumParts = parseVersion(minimum);
+  const length = Math.max(currentParts.length, minimumParts.length);
+
+  for (let i = 0; i < length; i += 1) {
+    const currentPart = currentParts[i] ?? 0;
+    const minimumPart = minimumParts[i] ?? 0;
+
+    if (currentPart > minimumPart) return true;
+    if (currentPart < minimumPart) return false;
+  }
+
+  return true;
+}
+
+function assertSupportedBunVersion() {
+  if (isVersionAtLeast(Bun.version, MIN_RELEASE_BUN_VERSION)) return;
+
+  throw new Error(
+    `build:release requires Bun >= ${MIN_RELEASE_BUN_VERSION}. Older Bun versions generate broken standalone binaries for OpenTUI native libraries. OpenCode solves this by building releases with Bun ${MIN_RELEASE_BUN_VERSION}. Current Bun: ${Bun.version}`
+  );
+}
+
 function parseArgs(argv: string[]): Map<string, string> {
   const args = new Map<string, string>();
 
@@ -113,6 +146,8 @@ async function ensureOpenTuiTargetPackage(target: BuildTarget) {
 
 const args = parseArgs(process.argv.slice(2));
 const requestedTarget = args.get("--target");
+
+assertSupportedBunVersion();
 
 if (requestedTarget && !isBuildTarget(requestedTarget)) {
   throw new Error(`Unsupported --target ${requestedTarget}. Supported targets: ${SUPPORTED_TARGETS.join(", ")}`);
