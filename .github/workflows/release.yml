@@ -52,7 +52,7 @@ jobs:
             target: bun-windows-x64
             asset_name: dataslip-windows-x64
             archive_name: dataslip-windows-x64.zip
-          - runner: macos-13
+          - runner: macos-14
             target: bun-darwin-x64
             asset_name: dataslip-darwin-x64
             archive_name: dataslip-darwin-x64.tar.gz

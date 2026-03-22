@@ -2,6 +2,7 @@
 
 import { $ } from "bun";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 const SUPPORTED_TARGETS = [
@@ -78,6 +79,38 @@ function parseTarget(target: BuildTarget) {
   return { platform, arch };
 }
 
+async function ensureOpenTuiTargetPackage(target: BuildTarget) {
+  const { platform, arch } = parseTarget(target);
+  const packagePlatform = platform === "windows" ? "win32" : platform;
+  const packageName = `@opentui/core-${packagePlatform}-${arch}`;
+  const packageDir = path.join("node_modules", "@opentui", `core-${packagePlatform}-${arch}`);
+  const packagePath = path.join(packageDir, "index.ts");
+
+  try {
+    await fs.access(packagePath);
+    return;
+  } catch {
+    const corePackage = (await Bun.file("node_modules/@opentui/core/package.json").json()) as { version: string };
+    console.log(`Installing ${packageName}@${corePackage.version} for ${target}`);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dataslip-opentui-"));
+
+    try {
+      await $`npm install --prefix ${tempDir} --no-save --force ${`${packageName}@${corePackage.version}`}`;
+      try {
+        await fs.mkdir(path.dirname(packageDir), { recursive: true });
+      } catch {
+        // Bun can throw EEXIST here even with recursive enabled.
+      }
+      await fs.rm(packageDir, { recursive: true, force: true });
+      await fs.cp(path.join(tempDir, "node_modules", "@opentui", `core-${packagePlatform}-${arch}`), packageDir, {
+        recursive: true,
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+}
+
 const args = parseArgs(process.argv.slice(2));
 const requestedTarget = args.get("--target");
 
@@ -96,6 +129,8 @@ const binaryPath = path.join(artifactDir, binaryName);
 
 await fs.rm(artifactDir, { recursive: true, force: true });
 await fs.mkdir(artifactDir, { recursive: true });
+
+await ensureOpenTuiTargetPackage(target);
 
 await $`bun build ./src/index.tsx --compile --target=${target} --outfile ${binaryPath} --tsconfig-override ./tsconfig.json`;
 
